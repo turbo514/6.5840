@@ -2,6 +2,7 @@ package raft
 
 import (
 	"log"
+	"sync/atomic"
 )
 
 // Debugging
@@ -20,9 +21,9 @@ const (
 )
 
 func (rf *Raft) setRole(role int32) {
-	rf.role = role
+	atomic.StoreInt32(&rf.role, role)
 }
 
 func (rf *Raft) getRole() int32 {
-	return rf.role
+	return atomic.LoadInt32(&rf.role)
 }
