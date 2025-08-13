@@ -3,6 +3,7 @@ package kvsrv
 import (
 	"crypto/rand"
 	"math/big"
+	random "math/rand"
 	"sync/atomic"
 	"time"
 
@@ -45,7 +46,7 @@ func (ck *Clerk) Get(key string) string {
 			break
 		}
 
-		time.Sleep(200 * time.Microsecond)
+		time.Sleep(time.Millisecond * time.Duration(100+random.Intn(150)))
 	}
 	return ret
 }
@@ -88,7 +89,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) string {
 			break
 		}
 
-		time.Sleep(200 * time.Microsecond)
+		time.Sleep(time.Millisecond * time.Duration(100+random.Intn(150)))
 	}
 
 	return ret
