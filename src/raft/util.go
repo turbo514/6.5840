@@ -14,7 +14,7 @@ func DPrintf(format string, a ...interface{}) {
 	}
 }
 
-const Eebug = false
+const Eebug = true
 
 func EPrintf(format string, a ...interface{}) {
 	if Eebug {
@@ -36,10 +36,18 @@ func (rf *Raft) getRole() int32 {
 	return atomic.LoadInt32(&rf.role)
 }
 
-// func (rf *Raft) setCommitIndex(index int32) {
-// 	atomic.StoreInt32(&rf.commitIndex, index)
+func (rf *Raft) setCommitIndex(index int32) {
+	atomic.StoreInt32(&rf.commitIndex, index)
+}
+
+func (rf *Raft) getCommitIndex() int32 {
+	return atomic.LoadInt32(&rf.commitIndex)
+}
+
+// func (rf *Raft) serLastApplied(index int32) {
+// 	atomic.StoreInt32(&rf.lastApplied, index)
 // }
 
-// func (rf *Raft) getCommitIndex() int32 {
-// 	return atomic.LoadInt32(&rf.commitIndex)
+// func (rf *Raft) getLastApplied() int32 {
+// 	atomic.LoadInt32(&rf.lastApplied)
 // }

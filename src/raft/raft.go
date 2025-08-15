@@ -62,16 +62,16 @@ type Raft struct {
 	closeCh chan struct{}
 
 	applyCh       chan ApplyMsg // Raft通过该通道发送ApplyMsg消息
-	applyNotifier sync.Cond
+	applyNotifier chan struct{}
 
 	lastHeartbeat time.Time // 超时标志,若超时则变为candidate并开始选举
 	currentTerm   int       // 服务器已知最新的任期（在服务器首次启动时初始化为0，单调递增）
 	votedFor      int       // 当前任期内投票给的候选人的Id，如果没有投给任何候选人则为-1
 	role          int32     // 当前身份,原子变量防止并发问题
 
-	log         Log // 日志条目, 每个条目包含了用于状态机的命令，以及领导人接收到该条目时的任期（初始索引为1）
-	commitIndex int // 已知已提交（到日志中）的最高的日志条目的索引（初始值为0，单调递增）
-	lastApplied int // 已经被应用到状态机的最高的日志条目的索引（初始值为0，单调递增）
+	log         Log   // 日志条目, 每个条目包含了用于状态机的命令，以及领导人接收到该条目时的任期（初始索引为1）
+	commitIndex int32 // 已知已提交（到日志中）的最高的日志条目的索引（初始值为0，单调递增）
+	lastApplied int32 // 已经被应用到状态机的最高的日志条目的索引（初始值为0，单调递增）
 
 	// 选举后重新初始化
 	nextIndex  []int // 对于每一台服务器，发送到该服务器的下一个日志条目的索引（初始值为领导人最后的日志条目的索引+1）
@@ -259,6 +259,7 @@ func (rf *Raft) runLeader() {
 		rf.mu.Unlock()
 
 		// 开始AppendEntries
+
 		select {
 		case <-rf.closeCh:
 			rf.mu.Lock()
@@ -332,11 +333,12 @@ func (rf *Raft) runLeader() {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{
-		peers:     peers,
-		persister: persister,
-		me:        me,
-		closeCh:   make(chan struct{}),
-		applyCh:   applyCh,
+		peers:         peers,
+		persister:     persister,
+		me:            me,
+		closeCh:       make(chan struct{}),
+		applyCh:       applyCh,
+		applyNotifier: make(chan struct{}, 1),
 
 		lastHeartbeat: time.Now(),
 

@@ -12,7 +12,7 @@ type AppendEntriesArgs struct {
 	PrevLogIndex int     // 紧邻新日志条目之前的那个日志条目的索引
 	PrevLogTerm  int     // 紧邻新日志条目之前的那个日志条目的任期
 	Entries      []Entry // 需要被保存的日志条目（被当做心跳使用时，则日志条目内容为空；为了提高效率可能一次性发送多个）
-	LeaderCommit int     // 领导人的已知已提交的最高的日志条目的索引
+	LeaderCommit int32   // 领导人的已知已提交的最高的日志条目的索引
 }
 
 type AppendEntriesReply struct {
@@ -28,6 +28,7 @@ type AppendEntriesReply struct {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
 	if args.Term < rf.currentTerm {
 		// 如果领导人的任期小于接收者的当前任期,返回false
 		reply.Term = rf.currentTerm
@@ -89,7 +90,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	//EPrintf("[%d] 覆盖后entreis长度为%d", rf.me, len(rf.log.entries))
 
 	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = getMin(args.LeaderCommit, rf.getLastLogIndex())
+		rf.setCommitIndex(getMin32(args.LeaderCommit, int32(rf.getLastLogIndex())))
+		rf.signalApply()
 	}
 
 	reply.Success = true
@@ -103,7 +105,23 @@ func getMin(a, b int) int {
 	}
 }
 
+func getMin32(a, b int32) int32 {
+	if a < b {
+		return a
+	} else {
+		return b
+	}
+}
+
 func getMax(a, b int) int {
+	if a > b {
+		return a
+	} else {
+		return b
+	}
+}
+
+func getMax32(a, b int32) int32 {
 	if a > b {
 		return a
 	} else {
