@@ -60,14 +60,24 @@ type Raft struct {
 
 	closeCh chan struct{}
 
+	applyCh       chan ApplyMsg // Raft通过该通道发送ApplyMsg消息
+	applyNotifier sync.Cond
+
 	lastHeartbeat time.Time // 超时标志,若超时则变为candidate并开始选举
 	currentTerm   int       // 服务器已知最新的任期（在服务器首次启动时初始化为0，单调递增）
 	votedFor      int       // 当前任期内投票给的候选人的Id，如果没有投给任何候选人则为-1
 	role          int32     // 当前身份,原子变量防止并发问题
+
+	log         Log // 日志条目, 每个条目包含了用于状态机的命令，以及领导人接收到该条目时的任期（初始索引为1）
+	commitIndex int // 已知已提交（到日志中）的最高的日志条目的索引（初始值为0，单调递增）
+	lastApplied int // 已经被应用到状态机的最高的日志条目的索引（初始值为0，单调递增）
+
+	// 选举后重新初始化
+	nextIndex  []int // 对于每一台服务器，发送到该服务器的下一个日志条目的索引（初始值为领导人最后的日志条目的索引+1）
+	matchIndex []int // 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增）
 }
 
-// return currentTerm and whether this server
-// believes it is the leader.
+// 返回当前节点的任期,以及它是否认为自己是leader
 func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -87,40 +97,30 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	return rf.peers[server].Call("Raft.AppendEntries", args, reply)
 }
 
-// the service using Raft (e.g. a k/v server) wants to start
-// agreement on the next command to be appended to Raft's log. if this
-// server isn't the leader, returns false. otherwise start the
-// agreement and return immediately. there is no guarantee that this
-// command will ever be committed to the Raft log, since the leader
-// may fail or lose an election. even if the Raft instance has been killed,
-// this function should return gracefully.
-//
-// the first return value is the index that the command will appear at
-// if it's ever committed. the second return value is the current
-// term. the third return value is true if this server believes it is
-// the leader.
+// 第一个返回值是该命令如果最终被提交时将出现的索引
+// 第二个返回值是当前任期
+// 第三个返回值是当且节点是否为Leader
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
-	// Your code here (3B).
+	term := rf.currentTerm      // 当前任期
+	index := -1                 // 日志索引
+	if rf.getRole() != LEADER { // 如果当前节点不是leader
+		return term, index, false
+	}
 
-	return index, term, isLeader
+	// 若是Leader,则添加日志条目
+	rf.appendEntries(term, command)
+
+	index = rf.getLastLogIndex()
+	rf.matchIndex[rf.me]++
+	EPrintf("[%d] 客户端提交了日志给leader,index=%d,term=%d", rf.me, index, term)
+	return index, term, true
 }
 
-// the tester doesn't halt goroutines created by Raft after each test,
-// but it does call the Kill() method. your code can use killed() to
-// check whether Kill() has been called. the use of atomic avoids the
-// need for a lock.
-//
-// the issue is that long-running goroutines use memory and may chew
-// up CPU time, perhaps causing later tests to fail and generating
-// confusing debug output. any goroutine with a long-running loop
-// should call killed() to check whether it should stop.
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
-	// Your code here, if desired.
 	close(rf.closeCh)
 }
 
@@ -137,9 +137,11 @@ func (rf *Raft) run() {
 			switch rf.getRole() {
 			case FOLLOWER:
 				DPrintf("[%d] 进入runFollower", rf.me)
+				EPrintf("[%d] 进入runFollower", rf.me)
 				rf.runFollower()
 			case CANDIDATE:
 				DPrintf("[%d] 进入runCandidate", rf.me)
+				EPrintf("[%d] 进入runCandidate", rf.me)
 				rf.runCandidate()
 			case LEADER:
 				DPrintf("[%d] 进入runLeader", rf.me)
@@ -180,12 +182,14 @@ func (rf *Raft) runCandidate() {
 	rf.currentTerm++
 	rf.votedFor = rf.me
 	currentTerm := rf.currentTerm
+	lastLogIndex := rf.getLastLogIndex()
+	lastLogTerm := rf.getLastLogTerm()
 	rf.mu.Unlock()
 
 	// 有可能在这期间发生了身份的变化
 	// 若发生了变化,则要消除不属于现在身份的所有行为的影响
 
-	votech, count := rf.startElection(currentTerm), 1
+	votech, count := rf.startElection(currentTerm, lastLogIndex, lastLogTerm), 1
 
 	timeout := time.After(time.Millisecond * time.Duration((150 + rand.Int63n(200))))
 	for {
@@ -230,6 +234,14 @@ func (rf *Raft) runCandidate() {
 }
 
 func (rf *Raft) runLeader() {
+	rf.matchIndex = make([]int, len(rf.peers))
+	rf.nextIndex = make([]int, len(rf.peers))
+
+	for i := range rf.nextIndex {
+		rf.nextIndex[i] = rf.getLastLogIndex() + 1
+	}
+
+	rf.matchIndex[rf.me] = rf.getLastLogIndex()
 	rf.mu.Unlock()
 
 	for {
@@ -241,10 +253,8 @@ func (rf *Raft) runLeader() {
 		}
 
 		rf.mu.Lock()
-		args := AppendEntriesArgs{
-			Term:     rf.currentTerm,
-			LeaderId: rf.me,
-		}
+		// 更新leader的CommitIndex
+		rf.updateCommitIndex()
 		rf.mu.Unlock()
 
 		// 开始AppendEntries
@@ -253,22 +263,44 @@ func (rf *Raft) runLeader() {
 			rf.mu.Lock()
 			return
 		default:
-			rf.mu.Lock()
+			rf.mu.Lock() // 或许可以去掉锁?然后改成协程发送一轮?
 			for i := range rf.peers {
 				if i == rf.me {
 					continue
 				}
+
+				args := AppendEntriesArgs{
+					Term:     rf.currentTerm,
+					LeaderId: rf.me,
+
+					PrevLogIndex: rf.nextIndex[i] - 1,
+					PrevLogTerm:  rf.getLogTerm(rf.nextIndex[i] - 1),
+					Entries:      rf.getAppendEntries(rf.nextIndex[i]),
+					LeaderCommit: rf.commitIndex,
+				}
+
 				go func(i int) {
 					var reply AppendEntriesReply
 					if ok := rf.sendAppendEntries(i, &args, &reply); ok {
 						// 会出现并发
 						// 一把大锁保平安
 						rf.mu.Lock()
-						if rf.getRole() == LEADER && reply.Term > rf.currentTerm {
-							rf.currentTerm = reply.Term
-							rf.votedFor = -1
-							DPrintf("[%d] leader发现选期更大的节点,转变为follower", rf.me)
-							rf.setRole(FOLLOWER)
+						if rf.getRole() == LEADER {
+							if reply.Term > rf.currentTerm {
+								rf.currentTerm = reply.Term
+								rf.votedFor = -1
+								DPrintf("[%d] leader发现选期更大的节点,转变为follower", rf.me)
+								rf.setRole(FOLLOWER)
+							} else {
+								if !reply.Success {
+									rf.nextIndex[i]--
+								} else {
+									rf.matchIndex[i] = args.PrevLogIndex + len(args.Entries)
+									rf.nextIndex[i] = rf.matchIndex[i] + 1
+									//EPrintf("[%d] 发送日志给follower[%d]成功,matchIndex=%d,nextIndex=%d",
+									//	rf.me, i, rf.matchIndex[i], rf.nextIndex[i])
+								}
+							}
 						}
 						rf.mu.Unlock()
 					}
@@ -283,15 +315,8 @@ func (rf *Raft) runLeader() {
 
 }
 
-// the service or tester wants to create a Raft server. the ports
-// of all the Raft servers (including this one) are in peers[]. this
-// server's port is peers[me]. all the servers' peers[] arrays
-// have the same order. persister is a place for this server to
-// save its persistent state, and also initially holds the most
-// recent saved state, if any. applyCh is a channel on which the
-// tester or service expects Raft to send ApplyMsg messages.
-// Make() must return quickly, so it should start goroutines
-// for any long-running work.
+// 创建一个Raft节点
+// applyCh是测试者或服务预期Raft通过该通道发送ApplyMsg消息的通道
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{
@@ -299,19 +324,24 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		persister: persister,
 		me:        me,
 		closeCh:   make(chan struct{}),
+		applyCh:   applyCh,
 
 		lastHeartbeat: time.Now(),
 
 		currentTerm: 0,
 		votedFor:    -1,
 		role:        FOLLOWER,
-	}
 
-	// Your initialization code here (3A, 3B, 3C).
+		commitIndex: 0,
+		lastApplied: 0,
+		log:         newLog(),
+	}
 
 	rf.readPersist(persister.ReadRaftState())
 
 	go rf.run()
+
+	go rf.applyMsgFunc()
 
 	return rf
 }

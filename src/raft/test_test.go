@@ -8,12 +8,14 @@ package raft
 // test with the original before submitting.
 //
 
-import "testing"
-import "fmt"
-import "time"
-import "math/rand"
-import "sync/atomic"
-import "sync"
+import (
+	"fmt"
+	"math/rand"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
 
 // The tester generously allows solutions to complete elections in one second
 // (much more than the paper's range of timeouts).
@@ -231,35 +233,53 @@ func TestLeaderFailure3B(t *testing.T) {
 	defer cfg.cleanup()
 
 	cfg.begin("Test (3B): test failure of leaders")
-
+	EPrintf("1")
 	cfg.one(101, servers, false)
+	EPrintf("2?")
 
 	// disconnect the first leader.
 	leader1 := cfg.checkOneLeader()
 	cfg.disconnect(leader1)
+	EPrintf("3")
 
 	// the remaining followers should elect
 	// a new leader.
+	EPrintf("3.1")
 	cfg.one(102, servers-1, false)
+	EPrintf("3.2")
+
 	time.Sleep(RaftElectionTimeout)
+	EPrintf("3.3")
+
 	cfg.one(103, servers-1, false)
+	EPrintf("3.4")
+
+	EPrintf("4")
 
 	// disconnect the new leader.
 	leader2 := cfg.checkOneLeader()
 	cfg.disconnect(leader2)
+
+	EPrintf("5")
 
 	// submit a command to each server.
 	for i := 0; i < servers; i++ {
 		cfg.rafts[i].Start(104)
 	}
 
+	EPrintf("6")
+
 	time.Sleep(2 * RaftElectionTimeout)
+
+	EPrintf("7")
 
 	// check that command 104 did not commit.
 	n, _ := cfg.nCommitted(4)
 	if n > 0 {
 		t.Fatalf("%v committed but no majority", n)
 	}
+
+	EPrintf("8")
 
 	cfg.end()
 }
@@ -273,11 +293,17 @@ func TestFailAgree3B(t *testing.T) {
 
 	cfg.begin("Test (3B): agreement after follower reconnects")
 
+	EPrintf("0")
+
 	cfg.one(101, servers, false)
+
+	EPrintf("1")
 
 	// disconnect one follower from the network.
 	leader := cfg.checkOneLeader()
 	cfg.disconnect((leader + 1) % servers)
+
+	EPrintf("2")
 
 	// the leader and remaining follower should be
 	// able to agree despite the disconnected follower.
@@ -287,8 +313,12 @@ func TestFailAgree3B(t *testing.T) {
 	cfg.one(104, servers-1, false)
 	cfg.one(105, servers-1, false)
 
+	EPrintf("3")
+
 	// re-connect
 	cfg.connect((leader + 1) % servers)
+
+	EPrintf("4")
 
 	// the full set of servers should preserve
 	// previous agreements, and be able to agree
@@ -296,6 +326,8 @@ func TestFailAgree3B(t *testing.T) {
 	cfg.one(106, servers, true)
 	time.Sleep(RaftElectionTimeout)
 	cfg.one(107, servers, true)
+
+	EPrintf("5")
 
 	cfg.end()
 }

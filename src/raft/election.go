@@ -5,6 +5,9 @@ import "time"
 type RequestVoteArgs struct {
 	Term        int // 候选人的任期
 	CandidateID int // 候选人的编号
+
+	LastLogIndex int // 候选人的最后日志条目的索引值
+	LastLogTerm  int // 候选人最后日志条目的任期号
 }
 
 type RequestVoteReply struct {
@@ -30,8 +33,20 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		}
 	}
 
+	// 检查日志情况
+	// 投票人会拒绝掉那些日志没有自己新的投票请求
+	// 如果两份日志最后的条目的任期号不同，那么任期号大的日志更加新
+	// 如果两份日志最后的条目任期号相同，那么日志比较长的那个就更加新
+	if args.LastLogTerm < rf.getLastLogTerm() ||
+		(args.LastLogTerm == rf.getLastLogTerm() && args.LastLogIndex < rf.getLastLogIndex()) {
+		EPrintf("[%d] 接收到来自[%d]的选票,但日志情况不通过.LastLogTerm=%d,rf.getLastLogTerm=%d,LastLogIndex=%d,rf.getLastLogIndex=%d",
+			rf.me, args.CandidateID, args.LastLogTerm, rf.getLastLogTerm(), args.LastLogIndex, rf.getLastLogIndex())
+		return
+	}
+
 	// 投票,并重置follower超时器
 	DPrintf("[%d] 投票给 [%d]", rf.me, args.CandidateID)
+	EPrintf("[%d] 投票给 [%d]", rf.me, args.CandidateID)
 	rf.votedFor = args.CandidateID
 	rf.currentTerm = args.Term
 	rf.lastHeartbeat = time.Now()
@@ -40,7 +55,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.VoteGranted = true
 }
 
-func (rf *Raft) startElection(term int) <-chan *RequestVoteReply {
+func (rf *Raft) startElection(term, lastLogIndex, lastLogTerm int) <-chan *RequestVoteReply {
 	ch := make(chan *RequestVoteReply, len(rf.peers))
 
 	DPrintf("[%d] 开始了[%d]的选期", rf.me, term)
@@ -48,6 +63,9 @@ func (rf *Raft) startElection(term int) <-chan *RequestVoteReply {
 	args := RequestVoteArgs{
 		Term:        term,
 		CandidateID: rf.me,
+
+		LastLogIndex: lastLogIndex,
+		LastLogTerm:  lastLogTerm,
 	}
 
 	for i := range rf.peers {
