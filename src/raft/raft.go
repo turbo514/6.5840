@@ -21,6 +21,7 @@ import (
 	//	"bytes"
 
 	"math/rand"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -293,7 +294,18 @@ func (rf *Raft) runLeader() {
 								rf.setRole(FOLLOWER)
 							} else {
 								if !reply.Success {
-									rf.nextIndex[i]--
+									if reply.Xterm == -1 {
+										rf.nextIndex[i] = reply.Xlen
+									} else {
+										index := sort.Search(len(rf.log.entries), func(i int) bool {
+											return rf.log.entries[i].Term >= reply.Xterm
+										})
+										if rf.log.entries[index].Term != reply.Xterm {
+											rf.nextIndex[i] = reply.Xindex
+										} else {
+											rf.nextIndex[i] = rf.getLogIndex(index + 1)
+										}
+									}
 								} else {
 									rf.matchIndex[i] = args.PrevLogIndex + len(args.Entries)
 									rf.nextIndex[i] = rf.matchIndex[i] + 1

@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"sort"
 	"time"
 )
 
@@ -17,6 +18,11 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term    int  // 当前任期号，以便于leader去更新自己的任期号
 	Success bool // 如果跟随者所含有的条目和 prevLogIndex 以及 prevLogTerm 匹配上了，则为 true
+
+	// 用于快速恢复
+	Xterm  int // 冲突条目的任期号 (如果存在)
+	Xindex int // 冲突任期的第一个条目索引
+	Xlen   int // Follower 的日志长度
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -40,8 +46,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Term = rf.currentTerm
 
 	// 检查日志
-	if args.PrevLogIndex < rf.log.zeroLogIndex || args.PrevLogIndex > rf.getLastLogIndex() {
-		EPrintf("[%d] 日志[%d]不合规,超出范围[%d,%d]", rf.me, args.PrevLogIndex, rf.log.zeroLogIndex, rf.getLastLogIndex())
+	if args.PrevLogIndex < rf.log.zeroLogIndex {
+		EPrintf("[%d] 日志索引[%d]过小,zeroLogIndex=%d", rf.me, args.PrevLogIndex, rf.log.zeroLogIndex)
+		return
+	} else if args.PrevLogIndex > rf.getLastLogIndex() {
+		EPrintf("[%d] 日志索引[%d]过大,lastLogIndex=%d", rf.me, args.PrevLogIndex, rf.getLastLogIndex())
+		reply.Xterm = -1
+		reply.Xlen = rf.getLastLogIndex()
 		return
 	}
 
@@ -50,6 +61,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if rf.getLogTerm(args.PrevLogIndex) != args.PrevLogTerm {
 		EPrintf("[%d] 日志不合规,索引[%d]term不同,应当是%d,实际为%d)",
 			rf.me, args.PrevLogIndex, args.PrevLogTerm, rf.getLogTerm(args.PrevLogIndex))
+		reply.Xterm = rf.getLogTerm(args.PrevLogIndex)
+		reply.Xindex = rf.getLogIndex(sort.Search(len(rf.log.entries), func(i int) bool {
+			return rf.log.entries[i].Term >= reply.Xterm
+		}))
 		return
 	}
 
