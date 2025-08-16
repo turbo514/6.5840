@@ -25,10 +25,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	} else if args.Term > rf.currentTerm { // 如果遇到更大任期的选票,需要变为follower并重置
 		DPrintf("[%d] RequestVote收到选期更大的选票[%d],转变为follower", rf.me, args.Term)
 		rf.setRole(FOLLOWER)
+		rf.currentTerm = args.Term
 		rf.votedFor = -1
-		// rf.lastHeartbeat = time.Now()
+		rf.persist() // FIXME: 有概率进行了两次持久化,这应该是一个需要优化的点..但是为了代码整洁性..
 	} else {
 		if rf.votedFor != -1 && rf.votedFor != args.CandidateID { // 检查本轮是否还能投票
+			reply.Term = rf.currentTerm
 			return
 		}
 	}
@@ -48,8 +50,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	DPrintf("[%d] 投票给 [%d]", rf.me, args.CandidateID)
 	EPrintf("[%d] 投票给 [%d]", rf.me, args.CandidateID)
 	rf.votedFor = args.CandidateID
-	rf.currentTerm = args.Term
 	rf.lastHeartbeat = time.Now()
+	rf.persist() // FIXME: 第二次持久化
 
 	reply.Term = args.Term
 	reply.VoteGranted = true

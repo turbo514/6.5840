@@ -36,7 +36,7 @@ func (rf *Raft) applyMsgFunc() {
 
 				msg := ApplyMsg{
 					CommandValid: true,
-					Command:      rf.log.entries[index].Command,
+					Command:      rf.log.Entries[index].Command,
 					CommandIndex: int(lastApplied + 1),
 				}
 				rf.applyCh <- msg

@@ -38,6 +38,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// 变为Follower
 		rf.currentTerm = args.Term
 		rf.votedFor = -1
+		rf.persist()
 	}
 
 	//	DPrintf("[%d] 收到选期更大的AppendEntries,转变为follower", rf.me)
@@ -47,13 +48,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Term = rf.currentTerm
 
 	// 检查日志
-	if args.PrevLogIndex < rf.log.zeroLogIndex {
-		EPrintf("[%d] 日志索引[%d]过小,zeroLogIndex=%d", rf.me, args.PrevLogIndex, rf.log.zeroLogIndex)
+	if args.PrevLogIndex < rf.log.ZeroLogIndex {
+		EPrintf("[%d] 日志索引[%d]过小,zeroLogIndex=%d", rf.me, args.PrevLogIndex, rf.log.ZeroLogIndex)
 		return
 	} else if args.PrevLogIndex > rf.getLastLogIndex() {
 		EPrintf("[%d] 日志索引[%d]过大,lastLogIndex=%d", rf.me, args.PrevLogIndex, rf.getLastLogIndex())
 		reply.Xterm = -1
-		reply.Xlen = rf.getLastLogIndex()
+		reply.Xlen = rf.getLastLogIndex() + 1
 		return
 	}
 
@@ -63,8 +64,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		EPrintf("[%d] 日志不合规,索引[%d]term不同,应当是%d,实际为%d)",
 			rf.me, args.PrevLogIndex, args.PrevLogTerm, rf.getLogTerm(args.PrevLogIndex))
 		reply.Xterm = rf.getLogTerm(args.PrevLogIndex)
-		reply.Xindex = rf.getLogIndex(sort.Search(len(rf.log.entries), func(i int) bool {
-			return rf.log.entries[i].Term >= reply.Xterm
+		reply.Xindex = rf.getLogIndex(sort.Search(len(rf.log.Entries), func(i int) bool {
+			return rf.log.Entries[i].Term >= reply.Xterm
 		}))
 		return
 	}
@@ -75,7 +76,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		index := args.PrevLogIndex + 1 + i // 获取日志索引
 		if index > rf.getLastLogIndex() {
 			// 日志缺失,直接追加
-			rf.log.entries = append(rf.log.entries, args.Entries[i:]...)
+			rf.log.Entries = append(rf.log.Entries, args.Entries[i:]...)
+			rf.persist()
 			break
 		}
 		if rf.getLogTerm(index) == args.Entries[i].Term {
@@ -83,7 +85,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			continue
 		} else {
 			// 存在但不一致,覆盖追加
-			rf.log.entries = append(rf.log.entries[:rf.getIndex(index)], args.Entries[i:]...)
+			rf.log.Entries = append(rf.log.Entries[:rf.getIndex(index)], args.Entries[i:]...)
+			rf.persist()
 			break
 		}
 	}

@@ -6,53 +6,53 @@ type Entry struct {
 }
 
 type Log struct {
-	entries      []Entry
-	zeroLogIndex int
+	Entries      []Entry
+	ZeroLogIndex int
 }
 
 func newLog() Log {
 	return Log{
-		entries:      make([]Entry, 1),
-		zeroLogIndex: 0,
+		Entries:      make([]Entry, 1),
+		ZeroLogIndex: 0,
 	}
 }
 
 // 获取数组中索引为index的日志索引
 func (rf *Raft) getLogIndex(index int) int {
-	return rf.log.zeroLogIndex + index
+	return rf.log.ZeroLogIndex + index
 }
 
 // 获取最新的日志的索引
 func (rf *Raft) getLastLogIndex() int {
-	return rf.getLogIndex(len(rf.log.entries) - 1)
+	return rf.getLogIndex(len(rf.log.Entries) - 1)
 }
 
 func (rf *Raft) getFirstLogIndex() int {
-	return rf.log.zeroLogIndex + 1
+	return rf.log.ZeroLogIndex + 1
 }
 
 // 获取日志索引为index的日志的数组索引
 func (rf *Raft) getIndex(index int) int {
-	return index - rf.log.zeroLogIndex
+	return index - rf.log.ZeroLogIndex
 }
 
 // 获取日志索引为index的日志的Term
 // 不考虑不存在的情况(或者说会直接panic)
 func (rf *Raft) getLogTerm(index int) int {
-	return rf.log.entries[index-rf.log.zeroLogIndex].Term
+	return rf.log.Entries[index-rf.log.ZeroLogIndex].Term
 }
 
 // 获取最新的日志的Term
 func (rf *Raft) getLastLogTerm() int {
-	return rf.log.entries[len(rf.log.entries)-1].Term
+	return rf.log.Entries[len(rf.log.Entries)-1].Term
 }
 
 // 节点添加日志
 func (rf *Raft) appendEntries(term int, command interface{}) {
-	rf.log.entries = append(rf.log.entries, Entry{Term: term, Command: command})
+	rf.log.Entries = append(rf.log.Entries, Entry{Term: term, Command: command})
 }
 
 // 获取日志索引index及往后的所有日志
 func (rf *Raft) getAppendEntries(index int) []Entry {
-	return rf.log.entries[index-rf.log.zeroLogIndex:]
+	return rf.log.Entries[index-rf.log.ZeroLogIndex:]
 }

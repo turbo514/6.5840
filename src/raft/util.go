@@ -14,10 +14,18 @@ func DPrintf(format string, a ...interface{}) {
 	}
 }
 
-const Eebug = true
+const Eebug = false
 
 func EPrintf(format string, a ...interface{}) {
 	if Eebug {
+		log.Printf(format, a...)
+	}
+}
+
+const Febug = false
+
+func FPrintf(format string, a ...interface{}) {
+	if Febug {
 		log.Printf(format, a...)
 	}
 }

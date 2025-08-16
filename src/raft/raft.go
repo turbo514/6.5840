@@ -20,6 +20,7 @@ package raft
 import (
 	//	"bytes"
 
+	"fmt"
 	"math/rand"
 	"sort"
 	"sync"
@@ -28,6 +29,7 @@ import (
 
 	//	"6.5840/labgob"
 	"6.5840/labrpc"
+	"github.com/davecgh/go-spew/spew"
 )
 
 // as each Raft peer becomes aware that successive log entries are
@@ -113,6 +115,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// 若是Leader,则添加日志条目
 	rf.appendEntries(term, command)
+	rf.persist()
 
 	index = rf.getLastLogIndex()
 	rf.matchIndex[rf.me]++
@@ -182,6 +185,8 @@ func (rf *Raft) runFollower() {
 func (rf *Raft) runCandidate() {
 	rf.currentTerm++
 	rf.votedFor = rf.me
+	rf.persist()
+
 	currentTerm := rf.currentTerm
 	lastLogIndex := rf.getLastLogIndex()
 	lastLogTerm := rf.getLastLogTerm()
@@ -217,6 +222,7 @@ func (rf *Raft) runCandidate() {
 				rf.setRole(FOLLOWER)
 				rf.currentTerm = reply.Term
 				rf.votedFor = -1
+				rf.persist()
 
 				return
 			}
@@ -226,6 +232,7 @@ func (rf *Raft) runCandidate() {
 				if count > len(rf.peers)/2 {
 					// 获得大多数选票,成为leader
 					rf.setRole(LEADER)
+					FPrintf("[%d] 成为leader", rf.me)
 					return
 				}
 			}
@@ -235,6 +242,14 @@ func (rf *Raft) runCandidate() {
 }
 
 func (rf *Raft) runLeader() {
+	i := 0
+	defer func() {
+		if err := recover(); err != nil {
+			fmt.Println("i=", i)
+			spew.Dump(rf)
+			panic(err)
+		}
+	}()
 	rf.matchIndex = make([]int, len(rf.peers))
 	rf.nextIndex = make([]int, len(rf.peers))
 
@@ -244,7 +259,6 @@ func (rf *Raft) runLeader() {
 
 	rf.matchIndex[rf.me] = rf.getLastLogIndex()
 	rf.mu.Unlock()
-
 	for {
 		// 检查自己是否还是leader
 		if rf.getRole() != LEADER {
@@ -266,7 +280,8 @@ func (rf *Raft) runLeader() {
 			return
 		default:
 			rf.mu.Lock() // 或许可以去掉锁?然后改成协程发送一轮?
-			for i := range rf.peers {
+
+			for i = range rf.peers {
 				if i == rf.me {
 					continue
 				}
@@ -282,6 +297,13 @@ func (rf *Raft) runLeader() {
 				}
 
 				go func(i int) {
+					defer func() {
+						if err := recover(); err != nil {
+							fmt.Println("i=", i)
+							spew.Dump(rf)
+							panic(err)
+						}
+					}()
 					var reply AppendEntriesReply
 					if ok := rf.sendAppendEntries(i, &args, &reply); ok {
 						// 会出现并发
@@ -289,21 +311,31 @@ func (rf *Raft) runLeader() {
 						rf.mu.Lock()
 						if rf.getRole() == LEADER {
 							if reply.Term > rf.currentTerm {
+								DPrintf("[%d] leader发现选期更大的节点,转变为follower", rf.me)
 								rf.currentTerm = reply.Term
 								rf.votedFor = -1
-								DPrintf("[%d] leader发现选期更大的节点,转变为follower", rf.me)
 								rf.setRole(FOLLOWER)
+								rf.persist()
 							} else {
 								if !reply.Success {
 									if reply.Xterm == -1 {
+										if reply.Xlen == 0 {
+											panic("reply.Xlen导致的nextIndex=0!!")
+										}
 										rf.nextIndex[i] = reply.Xlen
 									} else {
-										index := sort.Search(len(rf.log.entries), func(i int) bool {
-											return rf.log.entries[i].Term >= reply.Xterm
+										index := sort.Search(len(rf.log.Entries), func(i int) bool {
+											return rf.log.Entries[i].Term >= reply.Xterm
 										})
-										if rf.log.entries[index].Term != reply.Xterm {
+										if index >= len(rf.log.Entries) || rf.log.Entries[index].Term != reply.Xterm {
+											if reply.Xindex == 0 {
+												panic("reply.Xterm导致的nextIndex=0!!")
+											}
 											rf.nextIndex[i] = reply.Xindex
 										} else {
+											if rf.getLogIndex(index+1) == 0 {
+												panic("rf.getLogIndex导致的nextIndex=0!!")
+											}
 											rf.nextIndex[i] = rf.getLogIndex(index + 1)
 										}
 									}
