@@ -2,48 +2,50 @@ package raft
 
 import (
 	"sort"
+
+	"github.com/davecgh/go-spew/spew"
 )
 
 // 不断异步应用日志的线程
 func (rf *Raft) applyMsgFunc() {
+	defer func() {
+		if err := recover(); err != nil {
+			spew.Dump(rf)
+			panic(err)
+		}
+	}()
 	for {
 		select {
 		case <-rf.closeCh:
 			return
 
 		case <-rf.applyNotifier: // 应用日志(其实就是把命令提交给应用层)
-			// 有已提交但未应用的日志
-			// for i, entry := range rf.log.entries[rf.getIndex(rf.commitIndex):] {
-			// 	rf.applyCh <- ApplyMsg{
-			// 		CommandValid: true,
-			// 		Command:      entry.Command,
-			// 		CommandIndex: rf.getLogIndex(i),
-			// 	}
-			// }
-
 			// 有已提交但未应用的日志,开始应用
 			// 这一版或许语义更清晰点
-			// 不加锁是因为rf.commitIndex只会正向增长,应该没有关系?
-			for {
-				lastApplied := rf.lastApplied
-				commitIndex := rf.getCommitIndex()
 
-				if lastApplied >= commitIndex {
+			for {
+				rf.mu.Lock()
+				if rf.lastApplied >= rf.commitIndex {
+					rf.mu.Unlock()
 					break
 				}
 
-				index := rf.getIndex(int(lastApplied + 1))
+				rf.lastApplied++
+				index := rf.getIndex(rf.lastApplied)
 
 				msg := ApplyMsg{
 					CommandValid: true,
 					Command:      rf.log.Entries[index].Command,
-					CommandIndex: int(lastApplied + 1),
+					CommandIndex: int(rf.lastApplied),
 				}
+				rf.mu.Unlock()
+
+				// 应用层会鉴别是否包含在快照中(是否过期)
 				rf.applyCh <- msg
 
-				rf.lastApplied++
-				EPrintf("[%d] 应用了日志[%d]", rf.me, lastApplied+1)
+				EPrintf("[%d] 应用了日志[%d]", rf.me, rf.lastApplied+1)
 			}
+
 		}
 	}
 }
@@ -56,8 +58,8 @@ func (rf *Raft) updateCommitIndex() {
 
 	// 检查是否是当前任期提交的
 	//EPrintf("[%d] 更新提交前,commitIndex=%d", rf.me, rf.commitIndex)
-	if int32(minest) > rf.commitIndex && rf.getLogTerm(minest) == rf.currentTerm {
-		rf.setCommitIndex(getMax32(int32(minest), rf.commitIndex))
+	if minest > rf.commitIndex && rf.getLogTerm(minest) == rf.currentTerm {
+		rf.commitIndex = getMax(minest, rf.commitIndex)
 		rf.signalApply()
 	}
 	//EPrintf("[%d] 更新提交后,commitIndex=%d", rf.me, rf.commitIndex)

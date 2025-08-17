@@ -30,6 +30,14 @@ func FPrintf(format string, a ...interface{}) {
 	}
 }
 
+const Gebug = false
+
+func GPrintf(format string, a ...interface{}) {
+	if Gebug {
+		log.Printf(format, a...)
+	}
+}
+
 const (
 	FOLLOWER  int32 = 0
 	CANDIDATE int32 = 1
@@ -44,13 +52,25 @@ func (rf *Raft) getRole() int32 {
 	return atomic.LoadInt32(&rf.role)
 }
 
-func (rf *Raft) setCommitIndex(index int32) {
-	atomic.StoreInt32(&rf.commitIndex, index)
+func getMin(a, b int) int {
+	if a < b {
+		return a
+	} else {
+		return b
+	}
 }
 
-func (rf *Raft) getCommitIndex() int32 {
-	return atomic.LoadInt32(&rf.commitIndex)
+func getMax(a, b int) int {
+	if a > b {
+		return a
+	} else {
+		return b
+	}
 }
+
+// func dumpStacks() {
+// 	pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
+// }
 
 // func (rf *Raft) serLastApplied(index int32) {
 // 	atomic.StoreInt32(&rf.lastApplied, index)

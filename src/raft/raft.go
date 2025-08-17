@@ -20,7 +20,6 @@ package raft
 import (
 	//	"bytes"
 
-	"fmt"
 	"math/rand"
 	"sort"
 	"sync"
@@ -29,7 +28,6 @@ import (
 
 	//	"6.5840/labgob"
 	"6.5840/labrpc"
-	"github.com/davecgh/go-spew/spew"
 )
 
 // as each Raft peer becomes aware that successive log entries are
@@ -46,7 +44,7 @@ type ApplyMsg struct {
 	Command      interface{}
 	CommandIndex int
 
-	// For 3D:
+	// 快照相关
 	SnapshotValid bool
 	Snapshot      []byte
 	SnapshotTerm  int
@@ -71,9 +69,9 @@ type Raft struct {
 	votedFor      int       // 当前任期内投票给的候选人的Id，如果没有投给任何候选人则为-1
 	role          int32     // 当前身份,原子变量防止并发问题
 
-	log         Log   // 日志条目, 每个条目包含了用于状态机的命令，以及领导人接收到该条目时的任期（初始索引为1）
-	commitIndex int32 // 已知已提交（到日志中）的最高的日志条目的索引（初始值为0，单调递增）
-	lastApplied int32 // 已经被应用到状态机的最高的日志条目的索引（初始值为0，单调递增）
+	log         Log // 日志条目, 每个条目包含了用于状态机的命令，以及领导人接收到该条目时的任期（初始索引为1）
+	commitIndex int // 已知已提交（到日志中）的最高的日志条目的索引（初始值为0，单调递增）
+	lastApplied int // 已经被应用到状态机的最高的日志条目的索引（初始值为0，单调递增）
 
 	// 选举后重新初始化
 	nextIndex  []int // 对于每一台服务器，发送到该服务器的下一个日志条目的索引（初始值为领导人最后的日志条目的索引+1）
@@ -89,15 +87,6 @@ func (rf *Raft) GetState() (int, bool) {
 	isleader := rf.getRole() == LEADER
 
 	return term, isleader
-}
-
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	return ok
-}
-
-func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	return rf.peers[server].Call("Raft.AppendEntries", args, reply)
 }
 
 // 第一个返回值是该命令如果最终被提交时将出现的索引
@@ -242,14 +231,14 @@ func (rf *Raft) runCandidate() {
 }
 
 func (rf *Raft) runLeader() {
-	i := 0
-	defer func() {
-		if err := recover(); err != nil {
-			fmt.Println("i=", i)
-			spew.Dump(rf)
-			panic(err)
-		}
-	}()
+	// i := 0
+	// defer func() {
+	// 	if err := recover(); err != nil {
+	// 		fmt.Println("i=", i)
+	// 		spew.Dump(rf)
+	// 		panic(err)
+	// 	}
+	// }()
 	rf.matchIndex = make([]int, len(rf.peers))
 	rf.nextIndex = make([]int, len(rf.peers))
 
@@ -267,8 +256,8 @@ func (rf *Raft) runLeader() {
 			return
 		}
 
-		rf.mu.Lock()
 		// 更新leader的CommitIndex
+		rf.mu.Lock()
 		rf.updateCommitIndex()
 		rf.mu.Unlock()
 
@@ -280,14 +269,28 @@ func (rf *Raft) runLeader() {
 			return
 		default:
 			rf.mu.Lock() // 或许可以去掉锁?然后改成协程发送一轮?
-
-			for i = range rf.peers {
+			currentTerm := rf.currentTerm
+			for i := range rf.peers {
 				if i == rf.me {
 					continue
 				}
 
+				// 检查是否有用来增量同步的日志
+				if rf.nextIndex[i]-1 < rf.getLastIncludeIndex() {
+					// 没有,改用全量同步
+					arg := InstallSnapshotArgs{
+						Term:             rf.currentTerm,
+						LeaderId:         rf.me,
+						LastIncludeIndex: rf.getLastIncludeIndex(),
+						LastIncludeTerm:  rf.getLastIncludeTerm(),
+						Data:             rf.persister.ReadSnapshot(),
+					}
+					go rf.installSnapshotOnPeer(i, &arg)
+					continue
+				}
+
 				args := AppendEntriesArgs{
-					Term:     rf.currentTerm,
+					Term:     currentTerm,
 					LeaderId: rf.me,
 
 					PrevLogIndex: rf.nextIndex[i] - 1,
@@ -297,19 +300,12 @@ func (rf *Raft) runLeader() {
 				}
 
 				go func(i int) {
-					defer func() {
-						if err := recover(); err != nil {
-							fmt.Println("i=", i)
-							spew.Dump(rf)
-							panic(err)
-						}
-					}()
 					var reply AppendEntriesReply
 					if ok := rf.sendAppendEntries(i, &args, &reply); ok {
 						// 会出现并发
 						// 一把大锁保平安
 						rf.mu.Lock()
-						if rf.getRole() == LEADER {
+						if rf.getRole() == LEADER && rf.currentTerm == args.Term {
 							if reply.Term > rf.currentTerm {
 								DPrintf("[%d] leader发现选期更大的节点,转变为follower", rf.me)
 								rf.currentTerm = reply.Term
@@ -319,23 +315,14 @@ func (rf *Raft) runLeader() {
 							} else {
 								if !reply.Success {
 									if reply.Xterm == -1 {
-										if reply.Xlen == 0 {
-											panic("reply.Xlen导致的nextIndex=0!!")
-										}
-										rf.nextIndex[i] = reply.Xlen
+										rf.nextIndex[i] = reply.Xlen + 1
 									} else {
 										index := sort.Search(len(rf.log.Entries), func(i int) bool {
 											return rf.log.Entries[i].Term >= reply.Xterm
 										})
 										if index >= len(rf.log.Entries) || rf.log.Entries[index].Term != reply.Xterm {
-											if reply.Xindex == 0 {
-												panic("reply.Xterm导致的nextIndex=0!!")
-											}
 											rf.nextIndex[i] = reply.Xindex
 										} else {
-											if rf.getLogIndex(index+1) == 0 {
-												panic("rf.getLogIndex导致的nextIndex=0!!")
-											}
 											rf.nextIndex[i] = rf.getLogIndex(index + 1)
 										}
 									}
@@ -380,8 +367,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 		commitIndex: 0,
 		lastApplied: 0,
-		log:         newLog(),
+		log:         newLog(0, 0, nil),
 	}
+
+	// go func() {
+	// 	for {
+	// 		time.Sleep(5 * time.Second)
+	// 		dumpStacks()
+	// 	}
+	// }()
 
 	rf.readPersist(persister.ReadRaftState())
 

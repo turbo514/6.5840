@@ -15,6 +15,11 @@ type RequestVoteReply struct {
 	VoteGranted bool // 为真时候选人赢得了此张选票
 }
 
+func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
+
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()         // 考虑这么一种情况,在处理RequestVote请求时,刚好开启了新一轮选举,此时会更新currentTerm(follower还会更新角色和投票给谁)
 	defer rf.mu.Unlock() // 就有可能导致误投票,造成投了两票的错误
@@ -28,6 +33,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.currentTerm = args.Term
 		rf.votedFor = -1
 		rf.persist() // FIXME: 有概率进行了两次持久化,这应该是一个需要优化的点..但是为了代码整洁性..
+
 	} else {
 		if rf.votedFor != -1 && rf.votedFor != args.CandidateID { // 检查本轮是否还能投票
 			reply.Term = rf.currentTerm
@@ -43,6 +49,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		(args.LastLogTerm == rf.getLastLogTerm() && args.LastLogIndex < rf.getLastLogIndex()) {
 		EPrintf("[%d] 接收到来自[%d]的选票,但日志情况不通过.LastLogTerm=%d,rf.getLastLogTerm=%d,LastLogIndex=%d,rf.getLastLogIndex=%d",
 			rf.me, args.CandidateID, args.LastLogTerm, rf.getLastLogTerm(), args.LastLogIndex, rf.getLastLogIndex())
+		reply.Term = args.Term
 		return
 	}
 

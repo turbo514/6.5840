@@ -1135,10 +1135,16 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 	cfg := make_config(t, servers, !reliable, true)
 	defer cfg.cleanup()
 
+	GPrintf("1")
+
 	cfg.begin(name)
+
+	GPrintf("2")
 
 	cfg.one(rand.Int(), servers, true)
 	leader1 := cfg.checkOneLeader()
+
+	GPrintf("3")
 
 	for i := 0; i < iters; i++ {
 		victim := (leader1 + 1) % servers
@@ -1148,14 +1154,21 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			victim = leader1
 		}
 
+		GPrintf("3.1")
+
 		if disconnect {
 			cfg.disconnect(victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
+
+		GPrintf("3.2")
+
 		if crash {
 			cfg.crash1(victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
+
+		GPrintf("3.3")
 
 		// perhaps send enough to get a snapshot
 		nn := (SnapShotInterval / 2) + (rand.Int() % SnapShotInterval)
@@ -1163,19 +1176,28 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			cfg.rafts[sender].Start(rand.Int())
 		}
 
+		GPrintf("3.4")
+
 		// let applier threads catch up with the Start()'s
 		if disconnect == false && crash == false {
 			// make sure all followers have caught up, so that
 			// an InstallSnapshot RPC isn't required for
 			// TestSnapshotBasic3D().
+			GPrintf("3.41")
 			cfg.one(rand.Int(), servers, true)
 		} else {
+			GPrintf("3.42")
 			cfg.one(rand.Int(), servers-1, true)
 		}
+
+		GPrintf("3.5")
 
 		if cfg.LogSize() >= MAXLOGSIZE {
 			cfg.t.Fatalf("Log size too large")
 		}
+
+		GPrintf("3.6")
+
 		if disconnect {
 			// reconnect a follower, who maybe behind and
 			// needs to rceive a snapshot to catch up.
@@ -1183,13 +1205,20 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			cfg.one(rand.Int(), servers, true)
 			leader1 = cfg.checkOneLeader()
 		}
+
+		GPrintf("3.7")
+
 		if crash {
 			cfg.start1(victim, cfg.applierSnap)
 			cfg.connect(victim)
 			cfg.one(rand.Int(), servers, true)
 			leader1 = cfg.checkOneLeader()
 		}
+
+		GPrintf("3.8")
 	}
+
+	GPrintf("4")
 	cfg.end()
 }
 

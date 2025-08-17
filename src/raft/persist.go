@@ -18,15 +18,20 @@ func (rf *Raft) persist() {
 	FPrintf("[%d] 持久化中,currentTerm=%d,votedFor=%d,log=%+v",
 		rf.me, rf.currentTerm, rf.votedFor, rf.log)
 
+	raftstate := rf.encodeState()
+	snapshot := rf.persister.ReadSnapshot()
+	rf.persister.Save(raftstate, snapshot)
+
+	FPrintf("[%d] 持久化完成", rf.me)
+}
+
+func (rf *Raft) encodeState() []byte {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
 	e.Encode(rf.log)
-	raftstate := w.Bytes()
-	rf.persister.Save(raftstate, nil)
-
-	FPrintf("[%d] 持久化完成", rf.me)
+	return w.Bytes()
 }
 
 // restore previously persisted state.
@@ -52,6 +57,9 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.log = log
 	}
 
+	rf.lastApplied = rf.getLastIncludeIndex()
+	rf.commitIndex = rf.getLastIncludeIndex()
+
 	FPrintf("[%d] 持久化恢复结果:currentTerm=%d,votedFor=%d,log=%+v",
 		rf.me, rf.currentTerm, rf.votedFor, rf.log)
 }
@@ -61,6 +69,30 @@ func (rf *Raft) readPersist(data []byte) {
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	// Your code here (3D).
+	GPrintf("[%d] 开始创建快照,index=%d", rf.me, index)
 
+	select {
+	case <-rf.closeCh:
+		return
+	default:
+	}
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	// 判断是否是过期的快照
+	if index <= rf.getLastIncludeIndex() || index > rf.commitIndex {
+		GPrintf("[%d] 过期快照,index=%d,lastIncludeIndex=%d,commitIndex=%d",
+			rf.me, index, rf.getLastIncludeIndex(), rf.commitIndex)
+		return
+	}
+
+	arrayIndex := rf.getIndex(index)
+	lastIncludeTerm := rf.log.Entries[arrayIndex].Term
+
+	// 日志压缩和更新
+	rf.log = newLog(index, lastIncludeTerm, rf.log.Entries[arrayIndex+1:])
+
+	rf.persister.Save(rf.encodeState(), snapshot)
+	GPrintf("[%d] 创建快照完成,index=%d", rf.me, index)
 }
