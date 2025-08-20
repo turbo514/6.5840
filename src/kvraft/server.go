@@ -1,53 +1,184 @@
 package kvraft
 
 import (
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"6.5840/labgob"
 	"6.5840/labrpc"
 	"6.5840/raft"
-	"log"
-	"sync"
-	"sync/atomic"
 )
 
-const Debug = false
+type Op struct {
+	OpType int32
+	Key    string
+	Value  string
 
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug {
-		log.Printf(format, a...)
-	}
-	return
+	ClientId int64
+	MsgId    int64
 }
 
-
-type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+type lastRequest struct {
+	seq   int64
+	value string
 }
 
 type KVServer struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	me      int
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
 	dead    int32 // set by Kill()
+	closeCh chan struct{}
 
 	maxraftstate int // snapshot if log grows this big
 
-	// Your definitions here.
+	seqLock sync.RWMutex
+	seqMap  map[int64]int64
+
+	data map[string]string // 存储数据的地方
+
+	historyLock sync.RWMutex
+	history     map[int64]string
+
+	notifyLock  sync.RWMutex
+	notifyChMap map[int]chan Op
 }
 
+func (kv *KVServer) getSeq(clientId int64) int64 {
+	return kv.seqMap[clientId]
+}
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+	// 如果 kvserver 不是多数派的一部分，就不应完成 Get RPC
+	// 以避免服务过时数据
+	// 目前采用的简单方法是每个Get命令也记录在raft日志中
+	select {
+	case <-kv.closeCh:
+		return
+	default:
+	}
+
+	EPrintf("[%d]接收到请求,args=%+v", kv.me, args)
+
+	// 幂等检查
+	kv.seqLock.RLock()
+	if seq := kv.seqMap[args.ClientId]; args.MsgId <= seq {
+		//EPrintf("请求被幂等性过滤,seq:%+v,当前seq:%d", args, kv.seqMap[args.ClientId])
+		kv.seqLock.RUnlock()
+		reply.Err = OK
+		if args.MsgId == seq {
+			kv.historyLock.RLock()
+			reply.Value = kv.history[args.ClientId]
+			kv.historyLock.RUnlock()
+		}
+		return
+	}
+	kv.seqLock.RUnlock()
+
+	// 检查当前节点是否是leader,并提交
+	op := Op{
+		OpType:   GET,
+		Key:      args.Key,
+		ClientId: args.ClientId,
+		MsgId:    args.MsgId,
+		// 可以在OP上附加term,也可以在message上附加term
+	}
+	index, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		//EPrintf("[%d] 请求被非leader节点过滤,req=%+v", kv.me, args)
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	//EPrintf("[%d] leader接收到Get请求,req=%+v", kv.me, args)
+
+	timeout := time.After(500 * time.Millisecond)
+
+	// 准备监听
+	notifyCh := make(chan Op, 1)
+	kv.notifyLock.Lock()
+	kv.notifyChMap[index] = notifyCh
+	kv.notifyLock.Unlock()
+	defer func() {
+		kv.notifyLock.Lock()
+		delete(kv.notifyChMap, index)
+		kv.notifyLock.Unlock()
+	}()
+
+	// 监听
+	select {
+	case <-kv.closeCh:
+		reply.Err = ErrWrongLeader
+	case op := <-notifyCh:
+		reply.Value = op.Value
+		reply.Err = OK
+		//DPrintf("[%d] 读请求已应用,GET,index=%d,key=%s,value=%s", kv.me, index, op.Key, reply.Value)
+	case <-timeout:
+		reply.Err = ErrTimeout
+	}
 }
 
-func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
-}
+func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
+	select {
+	case <-kv.closeCh:
+		return
+	default:
+	}
 
-func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+	EPrintf("[%d]接收到请求,args=%+v", kv.me, args)
+
+	// 检查是否是过去的请求
+	kv.seqLock.RLock()
+	if args.MsgId <= kv.getSeq(args.ClientId) {
+		//EPrintf("请求被幂等性过滤,seq:%+v,当前seq:%d", args, kv.seqMap[args.ClientId])
+		kv.seqLock.RUnlock()
+		reply.Err = OK
+		return
+	}
+	kv.seqLock.RUnlock()
+
+	//EPrintf("[%d] leader接收到PutAppend请求,req=%+v", kv.me, args)
+
+	op := Op{
+		OpType: args.OpType,
+		Key:    args.Key,
+		Value:  args.Value,
+
+		ClientId: args.ClientId,
+		MsgId:    args.MsgId,
+	}
+
+	index, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		//EPrintf("[%d] 请求被非leader节点过滤,req=%+v", kv.me, args)
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	//EPrintf("[%d] leader接收到PutAppend请求,req=%+v", kv.me, args)
+
+	timeout := time.After(500 * time.Millisecond)
+
+	notifyCh := make(chan Op, 1)
+	kv.notifyLock.Lock()
+	kv.notifyChMap[index] = notifyCh
+	kv.notifyLock.Unlock()
+	defer func() {
+		kv.notifyLock.Lock()
+		delete(kv.notifyChMap, index)
+		kv.notifyLock.Unlock()
+	}()
+
+	select {
+	case <-kv.closeCh:
+		reply.Err = ErrWrongLeader
+	case <-notifyCh:
+		reply.Err = OK
+	case <-timeout:
+		reply.Err = ErrTimeout
+	}
 }
 
 // the tester calls Kill() when a KVServer instance won't
@@ -61,7 +192,7 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 func (kv *KVServer) Kill() {
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
-	// Your code here, if desired.
+	close(kv.closeCh)
 }
 
 func (kv *KVServer) killed() bool {
@@ -69,33 +200,103 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
-// servers[] contains the ports of the set of
-// servers that will cooperate via Raft to
-// form the fault-tolerant key/value service.
-// me is the index of the current server in servers[].
-// the k/v server should store snapshots through the underlying Raft
-// implementation, which should call persister.SaveStateAndSnapshot() to
-// atomically save the Raft state along with the snapshot.
-// the k/v server should snapshot when Raft's saved state exceeds maxraftstate bytes,
-// in order to allow Raft to garbage-collect its log. if maxraftstate is -1,
-// you don't need to snapshot.
-// StartKVServer() must return quickly, so it should start goroutines
-// for any long-running work.
+// servers[]: 一组 kvserver 的 RPC 通道端点
+// me: 当前服务器在 servers[] 中的索引
+// maxraftstate：Raft状态机允许的最大持久化大小（字节数）
+// 如果 maxraftstate == -1，就表示 不需要 snapshot
+// StartKVServer 函数必须立刻返回
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
-	// call labgob.Register on structures you want
-	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
 
-	kv := new(KVServer)
-	kv.me = me
-	kv.maxraftstate = maxraftstate
+	kv := &KVServer{
+		me:           me,
+		maxraftstate: maxraftstate,
+		applyCh:      make(chan raft.ApplyMsg),
+		closeCh:      make(chan struct{}),
 
-	// You may need initialization code here.
-
-	kv.applyCh = make(chan raft.ApplyMsg)
+		seqMap:      map[int64]int64{},
+		notifyChMap: map[int]chan Op{},
+		data:        map[string]string{},
+		history:     map[int64]string{},
+	}
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.readPersist(persister.ReadSnapshot())
 
-	// You may need initialization code here.
+	go kv.forwardMsg()
 
 	return kv
 }
+
+// func (kv *KVServer) Put(args *PutArgs, reply *PutReply) {
+// 	select {
+// 	case <-kv.closeCh:
+// 		return
+// 	default:
+// 	}
+
+// 	op := Op{
+// 		OpType: PUT,
+// 		Key:    args.Key,
+// 		Value:  args.Value,
+// 	}
+
+// 	index, _, isLeader := kv.rf.Start(op)
+// 	if !isLeader {
+// 		reply.Err = ErrWrongLeader
+// 		return
+// 	}
+
+// 	notifyCh := make(chan Op, 1)
+// 	kv.mu.Lock()
+// 	kv.notifyChMap[index] = notifyCh
+// 	kv.mu.Unlock()
+// 	defer func() {
+// 		kv.mu.Lock()
+// 		delete(kv.notifyChMap, index)
+// 		kv.mu.Unlock()
+// 	}()
+
+// 	select {
+// 	case <-kv.closeCh:
+// 		reply.Err = ErrWrongLeader
+// 	case <-notifyCh:
+// 		reply.Err = OK
+// 	}
+// }
+
+// func (kv *KVServer) Append(args *AppendArgs, reply *AppendReply) {
+// 	select {
+// 	case <-kv.closeCh:
+// 		return
+// 	default:
+// 	}
+
+// 	op := Op{
+// 		OpType: APPEND,
+// 		Key:    args.Key,
+// 		Value:  args.Value,
+// 	}
+
+// 	index, _, isLeader := kv.rf.Start(op)
+// 	if !isLeader {
+// 		reply.Err = ErrWrongLeader
+// 		return
+// 	}
+
+// 	notifyCh := make(chan Op, 1)
+// 	kv.mu.Lock()
+// 	kv.notifyChMap[index] = notifyCh
+// 	kv.mu.Unlock()
+// 	defer func() {
+// 		kv.mu.Lock()
+// 		delete(kv.notifyChMap, index)
+// 		kv.mu.Unlock()
+// 	}()
+
+// 	select {
+// 	case <-kv.closeCh:
+// 		reply.Err = ErrWrongLeader
+// 	case <-notifyCh:
+// 		reply.Err = OK
+// 	}
+// }

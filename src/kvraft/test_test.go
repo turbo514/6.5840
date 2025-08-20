@@ -1,16 +1,19 @@
 package kvraft
 
-import "6.5840/porcupine"
-import "6.5840/models"
-import "testing"
-import "strconv"
-import "time"
-import "math/rand"
-import "strings"
-import "sync"
-import "sync/atomic"
-import "fmt"
-import "io/ioutil"
+import (
+	"fmt"
+	"io/ioutil"
+	"math/rand"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"6.5840/models"
+	"6.5840/porcupine"
+)
 
 // The tester generously allows solutions to complete elections in one second
 // (much more than the paper's range of timeouts).
@@ -237,13 +240,19 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 	}
 	title = title + " (" + part + ")" // 4A or 4B
 
+	EPrintf("1")
+
 	cfg := make_config(t, nservers, unreliable, maxraftstate)
 	defer cfg.cleanup()
+
+	EPrintf("2")
 
 	cfg.begin(title)
 	opLog := &OpLog{}
 
 	ck := cfg.makeClient(cfg.All())
+
+	EPrintf("3")
 
 	done_partitioner := int32(0)
 	done_clients := int32(0)
@@ -252,6 +261,9 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 	for i := 0; i < nclients; i++ {
 		clnts[i] = make(chan int)
 	}
+
+	EPrintf("4")
+
 	for i := 0; i < 3; i++ {
 		// log.Printf("Iteration %v\n", i)
 		atomic.StoreInt32(&done_clients, 0)
@@ -259,6 +271,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		go spawn_clients_and_wait(t, cfg, nclients, func(cli int, myck *Clerk, t *testing.T) {
 			j := 0
 			defer func() {
+				//fmt.Println(j)
 				clnts[cli] <- j
 			}()
 			last := "" // only used when not randomkeys
@@ -274,7 +287,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 				}
 				nv := "x " + strconv.Itoa(cli) + " " + strconv.Itoa(j) + " y"
 				if (rand.Int() % 1000) < 500 {
-					// log.Printf("%d: client new append %v\n", cli, nv)
+					//log.Printf("%d: client new append %v\n", cli, nv)
 					Append(cfg, myck, key, nv, opLog, cli)
 					if !randomkeys {
 						last = NextValue(last, nv)
@@ -286,7 +299,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 					Put(cfg, myck, key, nv, opLog, cli)
 					j++
 				} else {
-					// log.Printf("%d: client new get %v\n", cli, key)
+					//log.Printf("%d: client new get %v\n", cli, key)
 					v := Get(cfg, myck, key, opLog, cli)
 					// the following check only makes sense when we're not using random keys
 					if !randomkeys && v != last {
@@ -295,6 +308,8 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 				}
 			}
 		})
+
+		EPrintf("5")
 
 		if partitions {
 			// Allow the clients to perform some operations without interruption
@@ -306,8 +321,10 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		atomic.StoreInt32(&done_clients, 1)     // tell clients to quit
 		atomic.StoreInt32(&done_partitioner, 1) // tell partitioner to quit
 
+		EPrintf("6")
+
 		if partitions {
-			// log.Printf("wait for partitioner\n")
+			//log.Printf("wait for partitioner\n")
 			<-ch_partitioner
 			// reconnect network and submit a request. A client may
 			// have submitted a request in a minority.  That request
@@ -317,6 +334,8 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 			// wait for a while so that we have a new term
 			time.Sleep(electionTimeout)
 		}
+
+		EPrintf("7")
 
 		if crash {
 			// log.Printf("shutdown servers\n")
@@ -334,10 +353,17 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 			cfg.ConnectAll()
 		}
 
-		// log.Printf("wait for clients\n")
+		EPrintf("8")
+
+		//log.Printf("wait for clients\n")
 		for i := 0; i < nclients; i++ {
-			// log.Printf("read from clients %d\n", i)
+			EPrintf("8.1.%d", i)
+
+			//log.Printf("read from clients %d\n", i)
 			j := <-clnts[i]
+
+			EPrintf("8.2.%d", i)
+
 			// if j < 10 {
 			// 	log.Printf("Warning: client %d managed to perform only %d put operations in 1 sec?\n", i, j)
 			// }
@@ -348,6 +374,8 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 				checkClntAppends(t, i, v, j)
 			}
 		}
+
+		EPrintf("9")
 
 		if maxraftstate > 0 {
 			// Check maximum after the servers have processed all client
@@ -366,23 +394,27 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		}
 	}
 
+	EPrintf("10")
+
 	res, info := porcupine.CheckOperationsVerbose(models.KvModel, opLog.Read(), linearizabilityCheckTimeout)
 	if res == porcupine.Illegal {
 		file, err := ioutil.TempFile("", "*.html")
 		if err != nil {
-			fmt.Printf("info: failed to create temp file for visualization")
+			//fmt.Printf("info: failed to create temp file for visualization")
 		} else {
 			err = porcupine.Visualize(models.KvModel, info, file)
 			if err != nil {
-				fmt.Printf("info: failed to write history visualization to %s\n", file.Name())
+				//fmt.Printf("info: failed to write history visualization to %s\n", file.Name())
 			} else {
-				fmt.Printf("info: wrote history visualization to %s\n", file.Name())
+				//fmt.Printf("info: wrote history visualization to %s\n", file.Name())
 			}
 		}
 		t.Fatal("history is not linearizable")
 	} else if res == porcupine.Unknown {
 		fmt.Println("info: linearizability check timed out, assuming history is ok")
 	}
+
+	EPrintf("11")
 
 	cfg.end()
 }
