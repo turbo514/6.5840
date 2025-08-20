@@ -60,14 +60,13 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.lastApplied = rf.getLastIncludeIndex()
 	rf.commitIndex = rf.getLastIncludeIndex()
 
-	FPrintf("[%d] 持久化恢复结果:currentTerm=%d,votedFor=%d,log=%+v",
-		rf.me, rf.currentTerm, rf.votedFor, rf.log)
+	// FPrintf("[%d] 持久化恢复结果:currentTerm=%d,votedFor=%d,log=%+v",
+	// 	rf.me, rf.currentTerm, rf.votedFor, rf.log)
 }
 
-// the service says it has created a snapshot that has
-// all info up to and including index. this means the
-// service no longer needs the log through (and including)
-// that index. Raft should now trim its log as much as possible.
+// 服务表示已创建了一个包含截至并包括该索引的所有信息的快照
+// 这意味着服务不再需要该索引（及之前）的日志
+// Raft 现应尽可能缩减其日志
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	GPrintf("[%d] 开始创建快照,index=%d", rf.me, index)
 

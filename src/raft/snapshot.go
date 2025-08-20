@@ -77,12 +77,6 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 }
 
 func (rf *Raft) installSnapshotOnPeer(server int, arg *InstallSnapshotArgs) {
-	snapshot := arg.Data
-	if len(snapshot) == 0 {
-		// debug用不过我认为这不会发生
-		panic("snap未准备好,放弃发送")
-	}
-
 	var reply InstallSnapshotReply
 	if ok := rf.sendInstallSnapshot(server, arg, &reply); ok {
 		rf.mu.Lock()

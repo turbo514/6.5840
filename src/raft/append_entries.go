@@ -25,6 +25,13 @@ type AppendEntriesReply struct {
 	Xlen   int // Follower 的日志长度
 }
 
+func (rf *Raft) signalReplicate() {
+	select {
+	case rf.replicateNotifier <- struct{}{}:
+	default:
+	}
+}
+
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	return rf.peers[server].Call("Raft.AppendEntries", args, reply)
 }
@@ -34,6 +41,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	defer rf.mu.Unlock()
 
 	GPrintf("[%d] 接收到AppendEntries请求", rf.me)
+	//fmt.Printf("[%d] 接收到来自[%d]的AppendEntries请求,commitIndex=%d,lastApplied=%d\n", rf.me, args.LeaderId, rf.commitIndex, rf.lastApplied)
 
 	if args.Term < rf.currentTerm {
 		// 如果领导人的任期小于接收者的当前任期,返回false

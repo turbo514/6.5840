@@ -2,19 +2,12 @@ package raft
 
 import (
 	"sort"
-
-	"github.com/davecgh/go-spew/spew"
 )
 
 // 不断异步应用日志的线程
 func (rf *Raft) applyMsgFunc() {
-	defer func() {
-		if err := recover(); err != nil {
-			spew.Dump(rf)
-			panic(err)
-		}
-	}()
 	for {
+		//fmt.Printf("[%d] applyMsgFunc还活着\n", rf.me)
 		select {
 		case <-rf.closeCh:
 			return
@@ -24,7 +17,7 @@ func (rf *Raft) applyMsgFunc() {
 			// 这一版或许语义更清晰点
 
 			for {
-				rf.mu.Lock()
+				rf.mu.Lock() // TODO: 或许可以改成先获取需要应用的日志,这样就不用不断获取锁了
 				if rf.lastApplied >= rf.commitIndex {
 					rf.mu.Unlock()
 					break
@@ -37,6 +30,7 @@ func (rf *Raft) applyMsgFunc() {
 					CommandValid: true,
 					Command:      rf.log.Entries[index].Command,
 					CommandIndex: int(rf.lastApplied),
+					CommandTerm:  rf.log.Entries[index].Term,
 				}
 				rf.mu.Unlock()
 
@@ -53,6 +47,9 @@ func (rf *Raft) applyMsgFunc() {
 // 更新leader的CommitIndex
 // FIXME: 真的需要锁吗?
 func (rf *Raft) updateCommitIndex() {
+	if rf.commitIndex >= rf.matchIndex[rf.me] {
+		return
+	}
 	// 寻找当前大多数节点都大于等于的值
 	minest := getMedian(rf.matchIndex)
 
@@ -80,5 +77,6 @@ func (rf *Raft) signalApply() {
 	select {
 	case rf.applyNotifier <- struct{}{}:
 	default: // 已经有信号了，就别重复发
+		//fmt.Printf("[%d] applyNotifier已满,疑似阻塞\ns", rf.me)
 	}
 }

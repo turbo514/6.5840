@@ -43,6 +43,7 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+	CommandTerm  int
 
 	// 快照相关
 	SnapshotValid bool
@@ -76,6 +77,8 @@ type Raft struct {
 	// 选举后重新初始化
 	nextIndex  []int // 对于每一台服务器，发送到该服务器的下一个日志条目的索引（初始值为领导人最后的日志条目的索引+1）
 	matchIndex []int // 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增）
+
+	replicateNotifier chan struct{}
 }
 
 // 返回当前节点的任期,以及它是否认为自己是leader
@@ -96,10 +99,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	term := rf.currentTerm      // 当前任期
 	index := -1                 // 日志索引
+	term := rf.currentTerm      // 当前任期
 	if rf.getRole() != LEADER { // 如果当前节点不是leader
-		return term, index, false
+		return index, term, false
 	}
 
 	// 若是Leader,则添加日志条目
@@ -109,6 +112,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index = rf.getLastLogIndex()
 	rf.matchIndex[rf.me]++
 	EPrintf("[%d] 客户端提交了日志给leader,index=%d,term=%d", rf.me, index, term)
+	//fmt.Printf("[%d] 客户端提交了日志给leader,index=%d,term=%d,commitIndex=%d,lastApplied=%d\n",
+	//	rf.me, index, term, rf.commitIndex, rf.lastApplied)
+	rf.signalReplicate()
 	return index, term, true
 }
 
@@ -231,14 +237,6 @@ func (rf *Raft) runCandidate() {
 }
 
 func (rf *Raft) runLeader() {
-	// i := 0
-	// defer func() {
-	// 	if err := recover(); err != nil {
-	// 		fmt.Println("i=", i)
-	// 		spew.Dump(rf)
-	// 		panic(err)
-	// 	}
-	// }()
 	rf.matchIndex = make([]int, len(rf.peers))
 	rf.nextIndex = make([]int, len(rf.peers))
 
@@ -248,27 +246,40 @@ func (rf *Raft) runLeader() {
 
 	rf.matchIndex[rf.me] = rf.getLastLogIndex()
 	rf.mu.Unlock()
-	for {
-		// 检查自己是否还是leader
-		if rf.getRole() != LEADER {
-			rf.mu.Lock()
-			DPrintf("[%d] 从leader退位,当前选期[%d]", rf.me, rf.currentTerm)
-			return
+
+	ticker := time.NewTicker(time.Millisecond * 100)
+	defer ticker.Stop()
+	ch := make(chan struct{})
+	defer close(ch)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				rf.signalReplicate()
+			case <-ch:
+				return
+			}
 		}
+	}()
 
-		// 更新leader的CommitIndex
-		rf.mu.Lock()
-		rf.updateCommitIndex()
-		rf.mu.Unlock()
-
+	for {
 		// 开始AppendEntries
-
 		select {
 		case <-rf.closeCh:
 			rf.mu.Lock()
 			return
-		default:
+		case <-rf.replicateNotifier:
 			rf.mu.Lock() // 或许可以去掉锁?然后改成协程发送一轮?
+
+			// 检查自己是否还是leader
+			if rf.getRole() != LEADER {
+				DPrintf("[%d] 从leader退位,当前选期[%d]", rf.me, rf.currentTerm)
+				return
+			}
+
+			// 更新leader的CommitIndex
+			//rf.updateCommitIndex()
+
 			currentTerm := rf.currentTerm
 			for i := range rf.peers {
 				if i == rf.me {
@@ -329,6 +340,7 @@ func (rf *Raft) runLeader() {
 								} else {
 									rf.matchIndex[i] = args.PrevLogIndex + len(args.Entries)
 									rf.nextIndex[i] = rf.matchIndex[i] + 1
+									rf.updateCommitIndex()
 									//EPrintf("[%d] 发送日志给follower[%d]成功,matchIndex=%d,nextIndex=%d",
 									//	rf.me, i, rf.matchIndex[i], rf.nextIndex[i])
 								}
@@ -340,9 +352,6 @@ func (rf *Raft) runLeader() {
 			}
 			rf.mu.Unlock()
 		}
-
-		// 有可能在此期间收到更加新的选期的投票请求或者心跳
-		time.Sleep(100 * time.Millisecond)
 	}
 
 }
@@ -368,14 +377,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		commitIndex: 0,
 		lastApplied: 0,
 		log:         newLog(0, 0, nil),
-	}
 
-	// go func() {
-	// 	for {
-	// 		time.Sleep(5 * time.Second)
-	// 		dumpStacks()
-	// 	}
-	// }()
+		replicateNotifier: make(chan struct{}, 1),
+	}
 
 	rf.readPersist(persister.ReadRaftState())
 
