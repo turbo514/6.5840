@@ -247,7 +247,7 @@ func (rf *Raft) runLeader() {
 	rf.matchIndex[rf.me] = rf.getLastLogIndex()
 	rf.mu.Unlock()
 
-	ticker := time.NewTicker(time.Millisecond * 100)
+	ticker := time.NewTicker(time.Millisecond * 80)
 	defer ticker.Stop()
 	ch := make(chan struct{})
 	defer close(ch)
@@ -277,79 +277,8 @@ func (rf *Raft) runLeader() {
 				return
 			}
 
-			// 更新leader的CommitIndex
-			//rf.updateCommitIndex()
+			rf.appendEntriesToPeers()
 
-			currentTerm := rf.currentTerm
-			for i := range rf.peers {
-				if i == rf.me {
-					continue
-				}
-
-				// 检查是否有用来增量同步的日志
-				if rf.nextIndex[i]-1 < rf.getLastIncludeIndex() {
-					// 没有,改用全量同步
-					arg := InstallSnapshotArgs{
-						Term:             rf.currentTerm,
-						LeaderId:         rf.me,
-						LastIncludeIndex: rf.getLastIncludeIndex(),
-						LastIncludeTerm:  rf.getLastIncludeTerm(),
-						Data:             rf.persister.ReadSnapshot(),
-					}
-					go rf.installSnapshotOnPeer(i, &arg)
-					continue
-				}
-
-				args := AppendEntriesArgs{
-					Term:     currentTerm,
-					LeaderId: rf.me,
-
-					PrevLogIndex: rf.nextIndex[i] - 1,
-					PrevLogTerm:  rf.getLogTerm(rf.nextIndex[i] - 1),
-					Entries:      rf.getAppendEntries(rf.nextIndex[i]),
-					LeaderCommit: rf.commitIndex,
-				}
-
-				go func(i int) {
-					var reply AppendEntriesReply
-					if ok := rf.sendAppendEntries(i, &args, &reply); ok {
-						// 会出现并发
-						// 一把大锁保平安
-						rf.mu.Lock()
-						if rf.getRole() == LEADER && rf.currentTerm == args.Term {
-							if reply.Term > rf.currentTerm {
-								DPrintf("[%d] leader发现选期更大的节点,转变为follower", rf.me)
-								rf.currentTerm = reply.Term
-								rf.votedFor = -1
-								rf.setRole(FOLLOWER)
-								rf.persist()
-							} else {
-								if !reply.Success {
-									if reply.Xterm == -1 {
-										rf.nextIndex[i] = reply.Xlen + 1
-									} else {
-										index := sort.Search(len(rf.log.Entries), func(i int) bool {
-											return rf.log.Entries[i].Term >= reply.Xterm
-										})
-										if index >= len(rf.log.Entries) || rf.log.Entries[index].Term != reply.Xterm {
-											rf.nextIndex[i] = reply.Xindex
-										} else {
-											rf.nextIndex[i] = rf.getLogIndex(index + 1)
-										}
-									}
-								} else {
-									rf.matchIndex[i] = args.PrevLogIndex + len(args.Entries)
-									rf.nextIndex[i] = rf.matchIndex[i] + 1
-									rf.updateCommitIndex()
-									//EPrintf("[%d] 发送日志给follower[%d]成功,matchIndex=%d,nextIndex=%d",
-									//	rf.me, i, rf.matchIndex[i], rf.nextIndex[i])
-								}
-							}
-						}
-						rf.mu.Unlock()
-					}
-				}(i)
-			}
 			rf.mu.Unlock()
 		}
 	}
@@ -388,4 +317,84 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.applyMsgFunc()
 
 	return rf
+}
+
+func (rf *Raft) appendEntriesToPeers() {
+	// 更新leader的CommitIndex
+	//rf.updateCommitIndex()
+
+	for i := range rf.peers {
+		if i == rf.me {
+			continue
+		}
+		rf.appendEntriesToPeer(i)
+	}
+}
+
+func (rf *Raft) appendEntriesToPeer(i int) {
+	// 检查是否有用来增量同步的日志
+	if rf.nextIndex[i]-1 < rf.getLastIncludeIndex() {
+		// 没有,改用全量同步
+		arg := InstallSnapshotArgs{
+			Term:             rf.currentTerm,
+			LeaderId:         rf.me,
+			LastIncludeIndex: rf.getLastIncludeIndex(),
+			LastIncludeTerm:  rf.getLastIncludeTerm(),
+			Data:             rf.persister.ReadSnapshot(),
+		}
+		go rf.installSnapshotOnPeer(i, &arg)
+	} else {
+		// 增量同步
+		args := AppendEntriesArgs{
+			Term:     rf.currentTerm,
+			LeaderId: rf.me,
+
+			PrevLogIndex: rf.nextIndex[i] - 1,
+			PrevLogTerm:  rf.getLogTerm(rf.nextIndex[i] - 1),
+			Entries:      rf.getAppendEntries(rf.nextIndex[i]),
+			LeaderCommit: rf.commitIndex,
+		}
+		go rf.appendEntriesOnPeer(i, &args)
+	}
+}
+
+func (rf *Raft) appendEntriesOnPeer(i int, args *AppendEntriesArgs) {
+	var reply AppendEntriesReply
+	if ok := rf.sendAppendEntries(i, args, &reply); ok {
+		// 会出现并发
+		// 一把大锁保平安
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		if rf.getRole() == LEADER && rf.currentTerm == args.Term {
+			if reply.Term > rf.currentTerm {
+				DPrintf("[%d] leader发现选期更大的节点,转变为follower", rf.me)
+				rf.currentTerm = reply.Term
+				rf.votedFor = -1
+				rf.setRole(FOLLOWER)
+				rf.persist()
+			} else {
+				if !reply.Success {
+					if reply.Xterm == -1 {
+						rf.nextIndex[i] = reply.Xlen + 1
+					} else {
+						index := sort.Search(len(rf.log.Entries), func(i int) bool {
+							return rf.log.Entries[i].Term >= reply.Xterm
+						})
+						if index >= len(rf.log.Entries) || rf.log.Entries[index].Term != reply.Xterm {
+							rf.nextIndex[i] = reply.Xindex
+						} else {
+							rf.nextIndex[i] = rf.getLogIndex(index + 1)
+						}
+						rf.appendEntriesToPeer(i)
+					}
+				} else {
+					rf.matchIndex[i] = args.PrevLogIndex + len(args.Entries)
+					rf.nextIndex[i] = rf.matchIndex[i] + 1
+					rf.updateCommitIndex()
+					//EPrintf("[%d] 发送日志给follower[%d]成功,matchIndex=%d,nextIndex=%d",
+					//	rf.me, i, rf.matchIndex[i], rf.nextIndex[i])
+				}
+			}
+		}
+	}
 }

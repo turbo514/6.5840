@@ -15,10 +15,19 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-const Eebug = false
+const Eebug = true
 
 func EPrintf(format string, a ...interface{}) (n int, err error) {
 	if Eebug {
+		log.Printf(format, a...)
+	}
+	return
+}
+
+const Febug = false
+
+func FPrintf(format string, a ...interface{}) (n int, err error) {
+	if Febug {
 		log.Printf(format, a...)
 	}
 	return

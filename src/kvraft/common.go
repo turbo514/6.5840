@@ -9,28 +9,6 @@ const (
 
 type Err string
 
-type PutArgs struct {
-	Key      string
-	Value    string
-	ClientId int64
-	MsgId    int64
-}
-
-type PutReply struct {
-	Err Err
-}
-
-type AppendArgs struct {
-	Key      string
-	Value    string
-	ClientId int64
-	MsgId    int64
-}
-
-type AppendReply struct {
-	Err Err
-}
-
 type PutAppendArgs struct {
 	OpType   int32
 	Key      string

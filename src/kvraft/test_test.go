@@ -240,19 +240,19 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 	}
 	title = title + " (" + part + ")" // 4A or 4B
 
-	EPrintf("1")
+	FPrintf("1")
 
 	cfg := make_config(t, nservers, unreliable, maxraftstate)
 	defer cfg.cleanup()
 
-	EPrintf("2")
+	FPrintf("2")
 
 	cfg.begin(title)
 	opLog := &OpLog{}
 
 	ck := cfg.makeClient(cfg.All())
 
-	EPrintf("3")
+	FPrintf("3")
 
 	done_partitioner := int32(0)
 	done_clients := int32(0)
@@ -262,7 +262,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		clnts[i] = make(chan int)
 	}
 
-	EPrintf("4")
+	FPrintf("4")
 
 	for i := 0; i < 3; i++ {
 		// log.Printf("Iteration %v\n", i)
@@ -309,7 +309,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 			}
 		})
 
-		EPrintf("5")
+		FPrintf("5")
 
 		if partitions {
 			// Allow the clients to perform some operations without interruption
@@ -321,7 +321,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		atomic.StoreInt32(&done_clients, 1)     // tell clients to quit
 		atomic.StoreInt32(&done_partitioner, 1) // tell partitioner to quit
 
-		EPrintf("6")
+		FPrintf("6")
 
 		if partitions {
 			//log.Printf("wait for partitioner\n")
@@ -335,7 +335,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 			time.Sleep(electionTimeout)
 		}
 
-		EPrintf("7")
+		FPrintf("7")
 
 		if crash {
 			// log.Printf("shutdown servers\n")
@@ -353,16 +353,16 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 			cfg.ConnectAll()
 		}
 
-		EPrintf("8")
+		FPrintf("8")
 
 		//log.Printf("wait for clients\n")
 		for i := 0; i < nclients; i++ {
-			EPrintf("8.1.%d", i)
+			FPrintf("8.1.%d", i)
 
 			//log.Printf("read from clients %d\n", i)
 			j := <-clnts[i]
 
-			EPrintf("8.2.%d", i)
+			FPrintf("8.2.%d", i)
 
 			// if j < 10 {
 			// 	log.Printf("Warning: client %d managed to perform only %d put operations in 1 sec?\n", i, j)
@@ -375,7 +375,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 			}
 		}
 
-		EPrintf("9")
+		FPrintf("9")
 
 		if maxraftstate > 0 {
 			// Check maximum after the servers have processed all client
@@ -394,7 +394,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		}
 	}
 
-	EPrintf("10")
+	FPrintf("10")
 
 	res, info := porcupine.CheckOperationsVerbose(models.KvModel, opLog.Read(), linearizabilityCheckTimeout)
 	if res == porcupine.Illegal {
@@ -414,7 +414,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		fmt.Println("info: linearizability check timed out, assuming history is ok")
 	}
 
-	EPrintf("11")
+	FPrintf("11")
 
 	cfg.end()
 }

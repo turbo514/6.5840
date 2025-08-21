@@ -19,11 +19,6 @@ type Op struct {
 	MsgId    int64
 }
 
-type lastRequest struct {
-	seq   int64
-	value string
-}
-
 type KVServer struct {
 	mu      sync.RWMutex
 	me      int
@@ -44,6 +39,9 @@ type KVServer struct {
 
 	notifyLock  sync.RWMutex
 	notifyChMap map[int]chan Op
+
+	persister   *raft.Persister
+	lastApplied int
 }
 
 func (kv *KVServer) getSeq(clientId int64) int64 {
@@ -63,19 +61,19 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	EPrintf("[%d]接收到请求,args=%+v", kv.me, args)
 
 	// 幂等检查
-	kv.seqLock.RLock()
+	kv.mu.Lock()
 	if seq := kv.seqMap[args.ClientId]; args.MsgId <= seq {
 		//EPrintf("请求被幂等性过滤,seq:%+v,当前seq:%d", args, kv.seqMap[args.ClientId])
-		kv.seqLock.RUnlock()
+		kv.mu.Unlock()
 		reply.Err = OK
 		if args.MsgId == seq {
-			kv.historyLock.RLock()
+			kv.mu.Lock()
 			reply.Value = kv.history[args.ClientId]
-			kv.historyLock.RUnlock()
+			kv.mu.Unlock()
 		}
 		return
 	}
-	kv.seqLock.RUnlock()
+	kv.mu.Unlock()
 
 	// 检查当前节点是否是leader,并提交
 	op := Op{
@@ -98,13 +96,13 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 	// 准备监听
 	notifyCh := make(chan Op, 1)
-	kv.notifyLock.Lock()
+	kv.mu.Lock()
 	kv.notifyChMap[index] = notifyCh
-	kv.notifyLock.Unlock()
+	kv.mu.Unlock()
 	defer func() {
-		kv.notifyLock.Lock()
+		kv.mu.Lock()
 		delete(kv.notifyChMap, index)
-		kv.notifyLock.Unlock()
+		kv.mu.Unlock()
 	}()
 
 	// 监听
@@ -130,14 +128,14 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	EPrintf("[%d]接收到请求,args=%+v", kv.me, args)
 
 	// 检查是否是过去的请求
-	kv.seqLock.RLock()
+	kv.mu.Lock()
 	if args.MsgId <= kv.getSeq(args.ClientId) {
 		//EPrintf("请求被幂等性过滤,seq:%+v,当前seq:%d", args, kv.seqMap[args.ClientId])
-		kv.seqLock.RUnlock()
+		kv.mu.Unlock()
 		reply.Err = OK
 		return
 	}
-	kv.seqLock.RUnlock()
+	kv.mu.Unlock()
 
 	//EPrintf("[%d] leader接收到PutAppend请求,req=%+v", kv.me, args)
 
@@ -162,13 +160,13 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	timeout := time.After(500 * time.Millisecond)
 
 	notifyCh := make(chan Op, 1)
-	kv.notifyLock.Lock()
+	kv.mu.Lock()
 	kv.notifyChMap[index] = notifyCh
-	kv.notifyLock.Unlock()
+	kv.mu.Unlock()
 	defer func() {
-		kv.notifyLock.Lock()
+		kv.mu.Lock()
 		delete(kv.notifyChMap, index)
-		kv.notifyLock.Unlock()
+		kv.mu.Unlock()
 	}()
 
 	select {
@@ -218,6 +216,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		notifyChMap: map[int]chan Op{},
 		data:        map[string]string{},
 		history:     map[int64]string{},
+
+		persister: persister,
 	}
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 	kv.readPersist(persister.ReadSnapshot())
