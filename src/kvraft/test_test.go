@@ -691,16 +691,27 @@ func TestSnapshotSize4B(t *testing.T) {
 	cfg := make_config(t, nservers, false, maxraftstate)
 	defer cfg.cleanup()
 
+	//fmt.Println("1")
+
 	ck := cfg.makeClient(cfg.All())
+
+	//fmt.Println("2")
 
 	cfg.begin("Test: snapshot size is reasonable (4B)")
 
 	for i := 0; i < 200; i++ {
+		//fmt.Printf("%d.0\n", i)
 		Put(cfg, ck, "x", "0", nil, -1)
+		//fmt.Printf("%d.1\n", i)
 		check(cfg, t, ck, "x", "0")
+		//fmt.Printf("%d.2\n", i)
 		Put(cfg, ck, "x", "1", nil, -1)
+		//fmt.Printf("%d.3\n", i)
 		check(cfg, t, ck, "x", "1")
+		//fmt.Printf("%d.4\n", i)
 	}
+
+	//fmt.Println("3")
 
 	// check that servers have thrown away most of their log entries
 	sz := cfg.LogSize()
@@ -708,11 +719,15 @@ func TestSnapshotSize4B(t *testing.T) {
 		t.Fatalf("logs were not trimmed (%v > 8*%v)", sz, maxraftstate)
 	}
 
+	//fmt.Println("4")
+
 	// check that the snapshots are not unreasonably large
 	ssz := cfg.SnapshotSize()
 	if ssz > maxsnapshotstate {
 		t.Fatalf("snapshot too large (%v > %v)", ssz, maxsnapshotstate)
 	}
+
+	//fmt.Println("5")
 
 	cfg.end()
 }

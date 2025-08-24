@@ -1,6 +1,8 @@
 package raft
 
-import "time"
+import (
+	"time"
+)
 
 type InstallSnapshotArgs struct {
 	Term             int // leader的任期
@@ -23,11 +25,12 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
+	//log.Printf("[%d] 接收到了来自[%d]的安装快照请求,snapshotIndex=%d,lastIncludeIndex=%d\n",
+	//	rf.me, args.LeaderId, args.LastIncludeIndex, rf.getLastIncludeIndex())
 	// 检查是否是当前leader发送的
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
+		rf.mu.Unlock()
 		return
 	}
 
@@ -43,8 +46,9 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 	rf.lastHeartbeat = time.Now()
 
-	// 如果发送的快照所包含的数据并不新于自己的快照,舍弃
-	if args.LastIncludeIndex <= rf.getLastIncludeIndex() {
+	// 如果发送的快照所包含的数据并不新于自己的快照或并不新于自己的状态机,舍弃
+	if args.LastIncludeIndex <= rf.getLastIncludeIndex() || args.LastIncludeIndex <= rf.lastApplied {
+		rf.mu.Unlock()
 		return
 	}
 
@@ -64,16 +68,22 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.commitIndex = args.LastIncludeIndex
 	}
 
+	//log.Printf("[%d] 已更新,lastApplied=%d,commitIndex=%d,LastIncludeIndex=%d\n", rf.me, rf.lastApplied, rf.commitIndex, rf.getLastIncludeIndex())
+
 	// 持久化
 	rf.persister.Save(rf.encodeState(), args.Data)
 
 	// 使用快照重置状态机
+	rf.mu.Unlock()
 	rf.applyCh <- ApplyMsg{
 		SnapshotValid: true,
 		Snapshot:      args.Data,
 		SnapshotTerm:  args.LastIncludeTerm,
 		SnapshotIndex: args.LastIncludeIndex,
 	}
+
+	//log.Printf("[%d] 日志安装成功,leaderid=%d,snapshotindex=%d\n",
+	//	rf.me, args.LeaderId, args.LastIncludeIndex)
 }
 
 func (rf *Raft) installSnapshotOnPeer(server int, arg *InstallSnapshotArgs) {

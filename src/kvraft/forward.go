@@ -2,6 +2,7 @@ package kvraft
 
 func (kv *KVServer) forwardMsg() {
 	for {
+		//fmt.Printf("[%d] forwardMsg还活着\n", kv.me)
 		select {
 		case <-kv.closeCh:
 			return
@@ -11,7 +12,8 @@ func (kv *KVServer) forwardMsg() {
 
 				op := msg.Command.(Op)
 
-				if msg.CommandIndex <= kv.lastApplied {
+				if msg.CommandIndex <= kv.snapshotIndex {
+					GPrintf("[%d] msg.CommandIndex[%d]小于kv.LastApplied[%d]", kv.me, msg.CommandIndex, kv.snapshotIndex)
 					continue
 				}
 
@@ -20,51 +22,54 @@ func (kv *KVServer) forwardMsg() {
 				// 对于PUT请求,过去的和现在的不能应用,现在的需要返回,未来的需要应用
 				// 对于APPEND请求,过去和现在的都不能应用,现在的需要返回,未来的需要应用
 				// 对于不需要应用的请求,我选择不在该协程函数回应
-				kv.mu.Lock()
+				kv.seqLock.RLock() // TODO: 没有竞态
 				if op.MsgId <= kv.getSeq(op.ClientId) {
 					//EPrintf("请求未通过幂等检查,op=%+v", op)
-					kv.mu.Unlock()
+					kv.seqLock.RUnlock()
 					continue
 				}
-				kv.mu.Unlock()
+				kv.seqLock.RUnlock()
 
 				// 请求应用
 				switch op.OpType {
 				case GET:
 					op.Value = kv.data[op.Key]
-					kv.mu.Lock()
+					kv.historyLock.Lock()
 					kv.history[op.ClientId] = op.Value
-					kv.mu.Unlock()
+					kv.historyLock.Unlock()
 				case PUT:
 					kv.data[op.Key] = op.Value
 				case APPEND:
 					kv.data[op.Key] += op.Value
 				}
+				GPrintf("[%d] 应用了请求,op=%+v,index=%d", kv.me, op, msg.CommandIndex)
 
-				kv.mu.Lock()
+				kv.notifyLock.RLock()
 				notifyCh := kv.notifyChMap[index]
-				kv.mu.Unlock()
+				kv.notifyLock.RUnlock()
 
-				kv.mu.Lock()
+				kv.seqLock.Lock()
 				kv.seqMap[op.ClientId] = op.MsgId
-				kv.mu.Unlock()
+				kv.seqLock.Unlock()
 
 				// 只有与Clerk通信的leader节点需要回应
 				if term, isLeader := kv.rf.GetState(); isLeader && term == msg.CommandTerm {
-					EPrintf("[%d] leader应用了[%d]请求,op=%+v", kv.me, index, op)
+					EPrintf("[%d] leader应用了[%d]请求,op=%+v,index=%d", kv.me, index, op, msg.CommandIndex)
 					notifyCh <- op
 				}
 
 				if kv.needSnapshot() {
-					kv.mu.Lock()
+					//kv.mu.Lock()
+					GPrintf("[%d] 制作快照,snapshotIndex=%d", kv.me, msg.CommandIndex)
 					kv.makeSnapshot(msg.CommandIndex)
-					kv.mu.Unlock()
+					//kv.mu.Unlock()
 				}
 
 			} else if msg.SnapshotValid { // 检查是否是安装快照命令
-				kv.mu.Lock()
+				//kv.mu.Lock()
+				GPrintf("[%d] 安装快照,snapshotIndex=%+d", kv.me, msg.SnapshotIndex)
 				kv.readPersist(msg.Snapshot)
-				kv.mu.Unlock()
+				//kv.mu.Unlock()
 			}
 		}
 	}

@@ -115,6 +115,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//fmt.Printf("[%d] 客户端提交了日志给leader,index=%d,term=%d,commitIndex=%d,lastApplied=%d\n",
 	//	rf.me, index, term, rf.commitIndex, rf.lastApplied)
 	rf.signalReplicate()
+	rf.signalApply()
 	return index, term, true
 }
 
@@ -315,7 +316,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.run()
 
 	go rf.applyMsgFunc()
-
+	rf.signalApply()
 	return rf
 }
 
@@ -385,8 +386,8 @@ func (rf *Raft) appendEntriesOnPeer(i int, args *AppendEntriesArgs) {
 						} else {
 							rf.nextIndex[i] = rf.getLogIndex(index + 1)
 						}
-						rf.appendEntriesToPeer(i)
 					}
+					rf.appendEntriesToPeer(i)
 				} else {
 					rf.matchIndex[i] = args.PrevLogIndex + len(args.Entries)
 					rf.nextIndex[i] = rf.matchIndex[i] + 1

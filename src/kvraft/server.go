@@ -40,8 +40,8 @@ type KVServer struct {
 	notifyLock  sync.RWMutex
 	notifyChMap map[int]chan Op
 
-	persister   *raft.Persister
-	lastApplied int
+	persister     *raft.Persister
+	snapshotIndex int
 }
 
 func (kv *KVServer) getSeq(clientId int64) int64 {
@@ -58,22 +58,22 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	default:
 	}
 
-	EPrintf("[%d]接收到请求,args=%+v", kv.me, args)
+	//fmt.Printf("[%d]接收到请求,args=%+v\n", kv.me, args)
 
 	// 幂等检查
-	kv.mu.Lock()
+	kv.seqLock.RLock()
 	if seq := kv.seqMap[args.ClientId]; args.MsgId <= seq {
-		//EPrintf("请求被幂等性过滤,seq:%+v,当前seq:%d", args, kv.seqMap[args.ClientId])
-		kv.mu.Unlock()
+		//fmt.Printf("请求被幂等性过滤,seq:%+v,当前seq:%d\n", args, kv.seqMap[args.ClientId])
+		kv.seqLock.RUnlock()
 		reply.Err = OK
 		if args.MsgId == seq {
-			kv.mu.Lock()
+			kv.historyLock.RLock()
 			reply.Value = kv.history[args.ClientId]
-			kv.mu.Unlock()
+			kv.historyLock.RUnlock()
 		}
 		return
 	}
-	kv.mu.Unlock()
+	kv.seqLock.RUnlock()
 
 	// 检查当前节点是否是leader,并提交
 	op := Op{
@@ -96,13 +96,13 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 	// 准备监听
 	notifyCh := make(chan Op, 1)
-	kv.mu.Lock()
+	kv.notifyLock.Lock()
 	kv.notifyChMap[index] = notifyCh
-	kv.mu.Unlock()
+	kv.notifyLock.Unlock()
 	defer func() {
-		kv.mu.Lock()
+		kv.notifyLock.Lock()
 		delete(kv.notifyChMap, index)
-		kv.mu.Unlock()
+		kv.notifyLock.Unlock()
 	}()
 
 	// 监听
@@ -115,6 +115,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		//DPrintf("[%d] 读请求已应用,GET,index=%d,key=%s,value=%s", kv.me, index, op.Key, reply.Value)
 	case <-timeout:
 		reply.Err = ErrTimeout
+		//fmt.Printf("[%d] 请求过期\n", kv.me)
 	}
 }
 
@@ -125,17 +126,17 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	default:
 	}
 
-	EPrintf("[%d]接收到请求,args=%+v", kv.me, args)
+	//fmt.Printf("[%d]接收到请求,args=%+v\n", kv.me, args)
 
 	// 检查是否是过去的请求
-	kv.mu.Lock()
+	kv.seqLock.RLock()
 	if args.MsgId <= kv.getSeq(args.ClientId) {
-		//EPrintf("请求被幂等性过滤,seq:%+v,当前seq:%d", args, kv.seqMap[args.ClientId])
-		kv.mu.Unlock()
+		//fmt.Printf("请求被幂等性过滤,seq:%+v,当前seq:%d\n", args, kv.seqMap[args.ClientId])
+		kv.seqLock.RUnlock()
 		reply.Err = OK
 		return
 	}
-	kv.mu.Unlock()
+	kv.seqLock.RUnlock()
 
 	//EPrintf("[%d] leader接收到PutAppend请求,req=%+v", kv.me, args)
 
@@ -160,13 +161,13 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	timeout := time.After(500 * time.Millisecond)
 
 	notifyCh := make(chan Op, 1)
-	kv.mu.Lock()
+	kv.notifyLock.Lock()
 	kv.notifyChMap[index] = notifyCh
-	kv.mu.Unlock()
+	kv.notifyLock.Unlock()
 	defer func() {
-		kv.mu.Lock()
+		kv.notifyLock.Lock()
 		delete(kv.notifyChMap, index)
-		kv.mu.Unlock()
+		kv.notifyLock.Unlock()
 	}()
 
 	select {
@@ -176,6 +177,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Err = OK
 	case <-timeout:
 		reply.Err = ErrTimeout
+		//fmt.Printf("[%d] 请求过期\n", kv.me)
 	}
 }
 
@@ -226,77 +228,3 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	return kv
 }
-
-// func (kv *KVServer) Put(args *PutArgs, reply *PutReply) {
-// 	select {
-// 	case <-kv.closeCh:
-// 		return
-// 	default:
-// 	}
-
-// 	op := Op{
-// 		OpType: PUT,
-// 		Key:    args.Key,
-// 		Value:  args.Value,
-// 	}
-
-// 	index, _, isLeader := kv.rf.Start(op)
-// 	if !isLeader {
-// 		reply.Err = ErrWrongLeader
-// 		return
-// 	}
-
-// 	notifyCh := make(chan Op, 1)
-// 	kv.mu.Lock()
-// 	kv.notifyChMap[index] = notifyCh
-// 	kv.mu.Unlock()
-// 	defer func() {
-// 		kv.mu.Lock()
-// 		delete(kv.notifyChMap, index)
-// 		kv.mu.Unlock()
-// 	}()
-
-// 	select {
-// 	case <-kv.closeCh:
-// 		reply.Err = ErrWrongLeader
-// 	case <-notifyCh:
-// 		reply.Err = OK
-// 	}
-// }
-
-// func (kv *KVServer) Append(args *AppendArgs, reply *AppendReply) {
-// 	select {
-// 	case <-kv.closeCh:
-// 		return
-// 	default:
-// 	}
-
-// 	op := Op{
-// 		OpType: APPEND,
-// 		Key:    args.Key,
-// 		Value:  args.Value,
-// 	}
-
-// 	index, _, isLeader := kv.rf.Start(op)
-// 	if !isLeader {
-// 		reply.Err = ErrWrongLeader
-// 		return
-// 	}
-
-// 	notifyCh := make(chan Op, 1)
-// 	kv.mu.Lock()
-// 	kv.notifyChMap[index] = notifyCh
-// 	kv.mu.Unlock()
-// 	defer func() {
-// 		kv.mu.Lock()
-// 		delete(kv.notifyChMap, index)
-// 		kv.mu.Unlock()
-// 	}()
-
-// 	select {
-// 	case <-kv.closeCh:
-// 		reply.Err = ErrWrongLeader
-// 	case <-notifyCh:
-// 		reply.Err = OK
-// 	}
-// }

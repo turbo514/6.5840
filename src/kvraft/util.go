@@ -15,7 +15,7 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-const Eebug = true
+const Eebug = false
 
 func EPrintf(format string, a ...interface{}) (n int, err error) {
 	if Eebug {
@@ -28,6 +28,15 @@ const Febug = false
 
 func FPrintf(format string, a ...interface{}) (n int, err error) {
 	if Febug {
+		log.Printf(format, a...)
+	}
+	return
+}
+
+const Gebug = false
+
+func GPrintf(format string, a ...interface{}) (n int, err error) {
+	if Gebug {
 		log.Printf(format, a...)
 	}
 	return

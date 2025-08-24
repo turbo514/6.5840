@@ -60,6 +60,7 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.lastApplied = rf.getLastIncludeIndex()
 	rf.commitIndex = rf.getLastIncludeIndex()
 
+	rf.signalApply()
 	// FPrintf("[%d] 持久化恢复结果:currentTerm=%d,votedFor=%d,log=%+v",
 	// 	rf.me, rf.currentTerm, rf.votedFor, rf.log)
 }

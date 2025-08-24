@@ -38,7 +38,7 @@ func (ck *Clerk) Get(key string) string {
 
 	for {
 		var reply GetReply
-		EPrintf("[%d] clerk发送了Get请求,req=%+v", ck.clientId, args)
+		GPrintf("[%d] clerk发送了Get请求,req=%+v\n", ck.clientId, args)
 		if ok := ck.callGet(ck.leaderId, &args, &reply); ok {
 			switch reply.Err {
 			case ErrWrongLeader:
@@ -87,7 +87,7 @@ func (ck *Clerk) PutAppend(key string, value string, opType int32) {
 
 	for {
 		var reply PutAppendReply
-		EPrintf("[%d] clerk发送了PutAppend请求,req=%+v", ck.clientId, args)
+		GPrintf("[%d] clerk发送了PutAppend请求,req=%+v\n", ck.clientId, args)
 		if ok := ck.callPutAppend(ck.leaderId, &args, &reply); ok {
 			switch reply.Err {
 			case OK:

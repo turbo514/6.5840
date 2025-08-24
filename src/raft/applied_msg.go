@@ -6,8 +6,8 @@ import (
 
 // 不断异步应用日志的线程
 func (rf *Raft) applyMsgFunc() {
+
 	for {
-		//fmt.Printf("[%d] applyMsgFunc还活着\n", rf.me)
 		select {
 		case <-rf.closeCh:
 			return
@@ -32,14 +32,13 @@ func (rf *Raft) applyMsgFunc() {
 					CommandIndex: int(rf.lastApplied),
 					CommandTerm:  rf.log.Entries[index].Term,
 				}
+				//log.Printf("[%d] 发送了ApplyMsg,Command=%+v\n", rf.me, msg.Command)
 				rf.mu.Unlock()
 
-				// 应用层会鉴别是否包含在快照中(是否过期)
 				rf.applyCh <- msg
 
 				EPrintf("[%d] 应用了日志[%d]", rf.me, rf.lastApplied+1)
 			}
-
 		}
 	}
 }
