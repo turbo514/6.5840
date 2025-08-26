@@ -12,6 +12,7 @@ func (kv *KVServer) forwardMsg() {
 
 				op := msg.Command.(Op)
 
+				// TODO: ?是否真的会发生
 				if msg.CommandIndex <= kv.snapshotIndex {
 					GPrintf("[%d] msg.CommandIndex[%d]小于kv.LastApplied[%d]", kv.me, msg.CommandIndex, kv.snapshotIndex)
 					continue
