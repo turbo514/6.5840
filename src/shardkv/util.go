@@ -2,10 +2,19 @@ package shardkv
 
 import (
 	"crypto/rand"
+	"log"
 	"math/big"
 
 	"6.5840/shardctrler"
 )
+
+const Debug = false
+
+func DPrintf(format string, a ...interface{}) {
+	if Debug {
+		log.Printf(format, a...)
+	}
+}
 
 func nrand() int64 {
 	max := big.NewInt(int64(1) << 62)
@@ -22,4 +31,12 @@ func key2shard(key string) int {
 	}
 	shard %= shardctrler.NShards
 	return shard
+}
+
+func getMax(a, b int64) int64 {
+	if a > b {
+		return a
+	} else {
+		return b
+	}
 }
